@@ -26,6 +26,7 @@ class SettingsTab(QWidget):
         self.parent = parent
         layout = QVBoxLayout(self)
 
+        # Besuchsmuster
         layout.addWidget(QLabel("📅 Besuchsmuster:"))
         wd_layout = QHBoxLayout()
         self.weekday_checks = []
@@ -35,55 +36,47 @@ class SettingsTab(QWidget):
             self.weekday_checks.append((i, cb))
         layout.addLayout(wd_layout)
 
+        # Interval und Startdatum
         param = QHBoxLayout()
         param.addWidget(QLabel("Intervall (Wochen):"))
-        self.interval = QSpinBox()
-        self.interval.setRange(1,52)
-        self.interval.setValue(1)
+        self.interval = QSpinBox(); self.interval.setRange(1,52); self.interval.setValue(1)
         param.addWidget(self.interval)
         param.addWidget(QLabel("Ab Datum:"))
-        self.start_date = QDateEdit(QDate(date.today().year, 1, 1))
-        self.start_date.setCalendarPopup(True)
+        self.start_date = QDateEdit(QDate(date.today().year,1,1)); self.start_date.setCalendarPopup(True)
         param.addWidget(self.start_date)
         self.btn_pattern = QPushButton("Pattern hinzufügen")
         param.addWidget(self.btn_pattern)
         layout.addLayout(param)
 
+        # Override
         layout.addWidget(QLabel("🔄 Override:"))
         ov_group = QGroupBox()
         ov_l = QHBoxLayout(ov_group)
-        self.ov_add = QRadioButton("Add-Satz")
-        self.ov_add.setChecked(True)
+        self.ov_add = QRadioButton("Add-Satz"); self.ov_add.setChecked(True)
         self.ov_remove = QRadioButton("Remove-Satz")
-        ov_l.addWidget(self.ov_add)
-        ov_l.addWidget(self.ov_remove)
+        ov_l.addWidget(self.ov_add); ov_l.addWidget(self.ov_remove)
         dlay = QHBoxLayout()
-        dlay.addWidget(QLabel("Von:"))
-        self.ov_from = QDateEdit(QDate.currentDate())
-        self.ov_from.setCalendarPopup(True)
-        dlay.addWidget(self.ov_from)
-        dlay.addWidget(QLabel("Bis:"))
-        self.ov_to = QDateEdit(QDate.currentDate())
-        self.ov_to.setCalendarPopup(True)
+        dlay.addWidget(QLabel("Von:")); self.ov_from = QDateEdit(QDate.currentDate()); self.ov_from.setCalendarPopup(True)
+        dlay.addWidget(self.ov_from); dlay.addWidget(QLabel("Bis:")); self.ov_to = QDateEdit(QDate.currentDate()); self.ov_to.setCalendarPopup(True)
         dlay.addWidget(self.ov_to)
         ov_l.addLayout(dlay)
         self.btn_override = QPushButton("Override hinzufügen")
         ov_l.addWidget(self.btn_override)
         layout.addWidget(ov_group)
 
+        # Eintragsliste und Buttons
         layout.addWidget(QLabel("Einträge:"))
-        self.entry_list = QListWidget()
-        layout.addWidget(self.entry_list)
+        self.entry_list = QListWidget(); layout.addWidget(self.entry_list)
         btns = QHBoxLayout()
         self.btn_delete = QPushButton("Eintrag löschen")
         self.btn_save = QPushButton("Speichern")
-        btns.addWidget(self.btn_delete)
-        btns.addWidget(self.btn_save)
+        btns.addWidget(self.btn_delete); btns.addWidget(self.btn_save)
         layout.addLayout(btns)
 
+        # Signale
         self.btn_pattern.clicked.connect(self.parent.on_add_pattern)
         self.btn_override.clicked.connect(self.parent.on_add_override)
-        self.btn_delete.clicked.connect(self.parent.on_delete)
+        self.btn_delete.clicked.connect(self.parent.on_delete_entry)
         self.btn_save.clicked.connect(self.parent.on_save_config)
 
 class StatusTab(QWidget):
@@ -92,24 +85,22 @@ class StatusTab(QWidget):
         self.parent = parent
         layout = QVBoxLayout(self)
 
-        hl = QHBoxLayout()
-        hl.addWidget(QLabel("Kinder:"))
-        self.child_count = QComboBox()
-        self.child_count.addItems([str(i) for i in range(1, 6)])
-        hl.addWidget(self.child_count)
-        layout.addLayout(hl)
+        # Kinderanzahl
+        hl = QHBoxLayout(); hl.addWidget(QLabel("Kinder:"))
+        self.child_count = QComboBox(); self.child_count.addItems([str(i) for i in range(1,6)])
+        hl.addWidget(self.child_count); layout.addLayout(hl)
 
+        # Abwesenheits-Checkboxen
         self.child_checks = []
-        self.grid = QGridLayout()
-        layout.addLayout(self.grid)
+        self.grid = QGridLayout(); layout.addLayout(self.grid)
+        self.btn_reset = QPushButton("Alle zurücksetzen"); layout.addWidget(self.btn_reset)
 
-        self.btn_reset = QPushButton("Alle zurücksetzen")
-        layout.addWidget(self.btn_reset)
-
-        self.calendar = QCalendarWidget()
-        self.calendar.setGridVisible(True)
+        # Kalender
+        self.calendar = QCalendarWidget(); self.calendar.setGridVisible(True)
         layout.addWidget(self.calendar)
+        layout.addWidget(QLabel("Checkbox wählen → Klick toggelt Abwesenheit."))
 
+        # Signale
         self.child_count.currentIndexChanged.connect(self.parent.on_child_count_changed)
         self.calendar.selectionChanged.connect(self.parent.on_calendar_click)
         self.btn_reset.clicked.connect(self.parent.on_reset_status)
@@ -120,90 +111,55 @@ class ExportTab(QWidget):
         self.parent = parent
         layout = QVBoxLayout(self)
 
-        hl = QHBoxLayout()
-        hl.addWidget(QLabel("Von:"))
-        self.date_from = QDateEdit(QDate.currentDate())
-        self.date_from.setCalendarPopup(True)
-        hl.addWidget(self.date_from)
-        hl.addWidget(QLabel("Bis:"))
-        self.date_to = QDateEdit(QDate.currentDate())
-        self.date_to.setCalendarPopup(True)
-        hl.addWidget(self.date_to)
-        layout.addLayout(hl)
+        # Zeitraum
+        hl = QHBoxLayout(); hl.addWidget(QLabel("Von:"))
+        self.date_from = QDateEdit(QDate.currentDate()); self.date_from.setCalendarPopup(True)
+        hl.addWidget(self.date_from); hl.addWidget(QLabel("Bis:"))
+        self.date_to = QDateEdit(QDate.currentDate()); self.date_to.setCalendarPopup(True)
+        hl.addWidget(self.date_to); layout.addLayout(hl)
 
-        self.cb_text = QCheckBox("Text")
-        self.cb_chart = QCheckBox("Chart")
-        self.cb_stats = QCheckBox("Stats")
+        # Optionen
+        self.cb_text = QCheckBox("Nur Textoutput"); self.cb_chart = QCheckBox("Diagramme"); self.cb_stats = QCheckBox("Statistiken")
         self.cb_text.setChecked(True)
-        o = QHBoxLayout()
-        o.addWidget(self.cb_text)
-        o.addWidget(self.cb_chart)
-        o.addWidget(self.cb_stats)
-        layout.addLayout(o)
+        opt = QHBoxLayout(); opt.addWidget(self.cb_text); opt.addWidget(self.cb_chart); opt.addWidget(self.cb_stats)
+        layout.addLayout(opt)
 
-        self.btn_export = QPushButton("Export starten")
-        layout.addWidget(self.btn_export)
+        # Export starten
+        self.btn_export = QPushButton("Export starten"); layout.addWidget(self.btn_export)
         self.btn_export.clicked.connect(self.parent.on_export)
 
 class MainWindow(QMainWindow):
     def __init__(self):
-        super().__init__()
-        self.setWindowTitle("KidsCompass")
-        self.resize(800,600)
-
-        self.patterns = []
-        self.overrides = []
-        self.visit_status = {}
-
-        tabs = QTabWidget()
-        self.setCentralWidget(tabs)
-        self.tab1 = SettingsTab(self)
-        self.tab2 = StatusTab(self)
-        self.tab3 = ExportTab(self)
-        tabs.addTab(self.tab1, "Einstellungen")
-        tabs.addTab(self.tab2, "Status")
-        tabs.addTab(self.tab3, "Export")
-
-        self.load_config()
-        self.refresh_calendar()
-        self.on_child_count_changed(0)
+        super().__init__(); self.setWindowTitle("KidsCompass"); self.resize(900,600)
+        self.patterns=[]; self.overrides=[]; self.visit_status={}
+        tabs=QTabWidget(); self.setCentralWidget(tabs)
+        self.tab1=SettingsTab(self); self.tab2=StatusTab(self); self.tab3=ExportTab(self)
+        tabs.addTab(self.tab1,"Einstellungen"); tabs.addTab(self.tab2,"Status"); tabs.addTab(self.tab3,"Export")
+        self.load_config(); self.refresh_calendar(); self.on_child_count_changed(0)
 
     def load_config(self):
-        if not os.path.exists(CONFIG_FILE):
-            return
-        try:
-            data = json.load(open(CONFIG_FILE, encoding='utf-8'))
-        except:
-            return
+        if not os.path.exists(CONFIG_FILE): return
+        try: data=json.load(open(CONFIG_FILE, encoding='utf-8'))
+        except: return
         self.patterns.clear(); self.overrides.clear(); self.visit_status.clear(); self.tab1.entry_list.clear()
-        for p in data.get('patterns', []):
-            pat = VisitPattern(p['weekdays'], p['interval_weeks'], date.fromisoformat(p['start_date']))
-            self.patterns.append(pat)
-            item = QListWidgetItem(str(pat)); item.setData(Qt.UserRole, pat); self.tab1.entry_list.addItem(item)
-        for o in data.get('overrides', []):
-            if o['type']=='add':
-                pat = VisitPattern(o['pattern']['weekdays'], o['pattern']['interval_weeks'], date.fromisoformat(o['pattern']['start_date']))
-                ov = OverridePeriod(date.fromisoformat(o['from_date']), date.fromisoformat(o['to_date']), pat)
-            else:
-                ov = RemoveOverride(date.fromisoformat(o['from_date']), date.fromisoformat(o['to_date']))
-            self.overrides.append(ov)
-            item = QListWidgetItem(str(ov)); item.setData(Qt.UserRole, ov); self.tab1.entry_list.addItem(item)
-        for vs in data.get('visit_status', []):
-            d0 = date.fromisoformat(vs['day'])
-            st = VisitStatus(day=d0, present_child_a=vs['present_child_a'], present_child_b=vs['present_child_b'])
-            self.visit_status[d0] = st
+        for p in data.get('patterns',[]):
+            pat=VisitPattern(p['weekdays'],p['interval_weeks'],date.fromisoformat(p['start_date']))
+            self.patterns.append(pat); item=QListWidgetItem(str(pat)); item.setData(Qt.UserRole,pat); self.tab1.entry_list.addItem(item)
+        for o in data.get('overrides',[]):
+            if o['type']=='add': pat_o=VisitPattern(o['pattern']['weekdays'],o['pattern']['interval_weeks'],date.fromisoformat(o['pattern']['start_date'])); ov=OverridePeriod(date.fromisoformat(o['from_date']),date.fromisoformat(o['to_date']),pat_o)
+            else: ov=RemoveOverride(date.fromisoformat(o['from_date']),date.fromisoformat(o['to_date']))
+            self.overrides.append(ov); item=QListWidgetItem(str(ov)); item.setData(Qt.UserRole,ov); self.tab1.entry_list.addItem(item)
+        for vs in data.get('visit_status',[]): d0=date.fromisoformat(vs['day']); st=VisitStatus(day=d0,present_child_a=vs['present_child_a'],present_child_b=vs['present_child_b']); self.visit_status[d0]=st
 
     def save_config(self):
         data={'patterns':[], 'overrides':[], 'visit_status':[]}
-        for p in self.patterns:
-            data['patterns'].append({'weekdays':p.weekdays,'interval_weeks':p.interval_weeks,'start_date':p.start_date.isoformat()})
+        for p in self.patterns: data['patterns'].append({'weekdays':p.weekdays,'interval_weeks':p.interval_weeks,'start_date':p.start_date.isoformat()})
         for o in self.overrides:
-            e={'type':'add' if isinstance(o,OverridePeriod) else 'remove','from_date':o.from_date.isoformat(),'to_date':o.to_date.isoformat()}
+            e={'type':'add' if isinstance(o, OverridePeriod) else 'remove','from_date':o.from_date.isoformat(),'to_date':o.to_date.isoformat()}
             if isinstance(o,OverridePeriod): e['pattern']={'weekdays':o.pattern.weekdays,'interval_weeks':o.pattern.interval_weeks,'start_date':o.pattern.start_date.isoformat()}
             data['overrides'].append(e)
-        for vs in self.visit_status.values():
-            data['visit_status'].append({'day':vs.day.isoformat(),'present_child_a':vs.present_child_a,'present_child_b':vs.present_child_b})
-        json.dump(data, open(CONFIG_FILE,'w',encoding='utf-8'),indent=2)
+        for vs in self.visit_status.values(): data['visit_status'].append({'day':vs.day.isoformat(),'present_child_a':vs.present_child_a,'present_child_b':vs.present_child_b})
+        json.dump(data,open(CONFIG_FILE,'w',encoding='utf-8'),indent=2)
     on_save_config=save_config
 
     def refresh_calendar(self):
@@ -211,8 +167,7 @@ class MainWindow(QMainWindow):
         today=date.today()
         planned=apply_overrides(sum((generate_standard_days(p,today.year) for p in self.patterns),[]),self.overrides)
         for d in planned:
-            if d<=today:
-                fmt=QTextCharFormat(); fmt.setBackground(QBrush(QColor('#A0C4FF'))); cal.setDateTextFormat(QDate(d.year,d.month,d.day),fmt)
+            if d<=today: fmt=QTextCharFormat(); fmt.setBackground(QBrush(QColor('#A0C4FF'))); cal.setDateTextFormat(QDate(d.year,d.month,d.day),fmt)
         for d,vs in self.visit_status.items():
             if d<=today:
                 qd=QDate(d.year,d.month,d.day); fmt=QTextCharFormat()
@@ -222,20 +177,20 @@ class MainWindow(QMainWindow):
                 cal.setDateTextFormat(qd,fmt)
 
     def on_add_pattern(self):
-        days=[i for i,cb in self.tab1.weekday_checks if cb.isChecked()]
-        iv=self.tab1.interval.value(); sd=self.tab1.start_date.date().toPython()
+        days=[i for i,cb in self.tab1.weekday_checks if cb.isChecked()]; iv=self.tab1.interval.value(); sd=self.tab1.start_date.date().toPython()
         pat=VisitPattern(days,iv,sd); self.patterns.append(pat)
         item=QListWidgetItem(str(pat)); item.setData(Qt.UserRole,pat); self.tab1.entry_list.addItem(item)
         self.refresh_calendar(); self.save_config()
 
     def on_add_override(self):
         f=self.tab1.ov_from.date().toPython(); t=self.tab1.ov_to.date().toPython()
-        if self.tab1.ov_add.isChecked(): pat=VisitPattern(list(range(7)),1,f); ov=OverridePeriod(f,t,pat)
+        if self.tab1.ov_add.isChecked(): pat_o=VisitPattern(list(range(7)),1,f); ov=OverridePeriod(f,t,pat_o)
         else: ov=RemoveOverride(f,t)
-        self.overrides.append(ov); item=QListWidgetItem(str(ov)); item.setData(Qt.UserRole,ov); self.tab1.entry_list.addItem(item)
+        self.overrides.append(ov)
+        item=QListWidgetItem(str(ov)); item.setData(Qt.UserRole,ov); self.tab1.entry_list.addItem(item)
         self.refresh_calendar(); self.save_config()
 
-    def on_delete(self):
+    def on_delete_entry(self):
         item=self.tab1.entry_list.currentItem();
         if not item: return
         obj=item.data(Qt.UserRole)
@@ -244,43 +199,56 @@ class MainWindow(QMainWindow):
         self.tab1.entry_list.takeItem(self.tab1.entry_list.row(item))
         self.refresh_calendar(); self.save_config()
 
-    def on_child_count_changed(self,idx):
-        for _,cb in self.tab2.child_checks: cb.deleteLater()
+    def on_child_count_changed(self, index):
+        # remove old checks
+        for _, cb in self.tab2.child_checks: cb.deleteLater()
         self.tab2.child_checks.clear()
-        for i in range(idx+1): cb=QCheckBox(f"Kind {i+1} nicht da"); self.tab2.grid.addWidget(cb,i//2,i%2); self.tab2.child_checks.append((i,cb))
+        # add new checks
+        for i in range(index+1):
+            cb=QCheckBox(f"Kind {i+1} nicht da")
+            self.tab2.grid.addWidget(cb, i//2, i%2)
+            self.tab2.child_checks.append((i, cb))
 
     def on_calendar_click(self):
+        # only toggle on planned days
+        today=date.today()
+        planned=apply_overrides(sum((generate_standard_days(p,today.year) for p in self.patterns),[]),self.overrides)
+        d=self.tab2.calendar.selectedDate().toPython()
+        if d not in planned: return
         idxs=[i for i,cb in self.tab2.child_checks if cb.isChecked()]
         if not idxs: return
-        d=self.tab2.calendar.selectedDate().toPython()
         vs=self.visit_status.get(d,VisitStatus(day=d))
         for i in idxs:
             if i==0: vs.present_child_a=not vs.present_child_a
-            if i==1: vs.present_child_b=not vs.present_child_b
-        if vs.present_child_a and vs.present_child_b: self.visit_status.pop(d,None)
-        else: self.visit_status[d]=vs
+            elif i==1: vs.present_child_b=not vs.present_child_b
+        # remove if both present
+        if vs.present_child_a and vs.present_child_b:
+            self.visit_status.pop(d,None)
+        else:
+            self.visit_status[d]=vs
         self.refresh_calendar(); self.save_config()
 
     def on_reset_status(self):
         self.visit_status.clear(); self.refresh_calendar(); self.save_config()
 
     def on_export(self):
-        df=self.tab3.date_from.date().toPython() if hasattr(self.tab3,'date_from') else date.today()
-        dt=self.tab3.date_to.date().toPython() if hasattr(self.tab3,'date_to') else date.today()
+        df=self.tab3.date_from.date().toPython(); dt=self.tab3.date_to.date().toPython();
         today=date.today()
         planned=apply_overrides(sum((generate_standard_days(p,today.year) for p in self.patterns),[]),self.overrides)
         sel=[d for d in planned if df<=d<=dt]
+        # text export
         if self.tab3.cb_text.isChecked():
             fn='report.txt'
             with open(fn,'w',encoding='utf-8') as f:
-                f.write('Report\n')
+                f.write('KidsCompass Report\n')
                 for d in sel:
-                    vs=self.visit_status.get(d,VisitStatus(day=d)); st='OK'
+                    vs=self.visit_status.get(d,VisitStatus(day=d))
+                    st='Alle da'
                     if not vs.present_child_a and not vs.present_child_b: st='Kein Kind'
                     elif not vs.present_child_a: st='Kind A fehlt'
                     elif not vs.present_child_b: st='Kind B fehlt'
-                    f.write(f"{d}: {st}\n")
-        QMessageBox.information(self,'Export','Fertig')
+                    f.write(f"{d.isoformat()}: {st}\n")
+        QMessageBox.information(self,'Export','Export abgeschlossen')
 
 if __name__=='__main__':
     app=QApplication(sys.argv)
