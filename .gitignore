@@ -172,3 +172,6 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+# Lokale Konfiguration von KidsCompass (nicht ins Repo)
+kidscompass_config.json
+kidscompass_config.json.bak
