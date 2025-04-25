@@ -15,7 +15,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "kidscompass=kidscompass.main:run_wizard",
+            "kidscompass=kidscompass.ui:main",
         ],
     },
 )

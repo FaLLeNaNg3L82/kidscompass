@@ -15,8 +15,8 @@ from PySide6.QtCore import Qt, QDate
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
-from kidscompass.models import VisitPattern, OverridePeriod, RemoveOverride, VisitStatus
-from kidscompass.calendar_logic import generate_standard_days, apply_overrides
+from .models import VisitPattern, OverridePeriod, RemoveOverride, VisitStatus
+from .calendar_logic import generate_standard_days, apply_overrides
 
 CONFIG_FILE = "kidscompass_config.json"
 
@@ -33,6 +33,16 @@ def summarize_visits(planned: list[date], visit_status: dict) -> dict:
         'missed_b': missed_b,
         'both_present': both_present,
     }
+
+def main():
+    app = QApplication(sys.argv)
+    win = MainWindow()
+    win.show()
+    sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()
+
 
 # Tortendiagramm-Funktion
 def create_pie_chart(values: list, labels: list, filename: str):
