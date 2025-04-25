@@ -58,3 +58,21 @@ def apply_overrides(
     # Vereinige verbleibende Standard- und alle Override-Termine
     combined = result_days.union(override_days)
     return sorted(combined)
+    
+    def summarize_visits(planned: list[date], status: dict[date, VisitStatus]):
+        """
+        Gegeben eine Liste geplanter Termine und ein Mapping auf VisitStatus,
+        liefert die absoluten und prozentualen Ausfallzahlen pro Kind.
+        """
+        total = len(planned)
+        missed_a = sum(1 for d in planned if d in status and not status[d].present_child_a)
+        missed_b = sum(1 for d in planned if d in status and not status[d].present_child_b)
+        percent_a = (total - missed_a) / total * 100 if total else 0
+        percent_b = (total - missed_b) / total * 100 if total else 0
+        return {
+            "total": total,
+            "missed_a": missed_a,
+            "missed_b": missed_b,
+            "attended_a_pct": round(percent_a,1),
+            "attended_b_pct": round(percent_b,1),
+        }

@@ -175,3 +175,7 @@ cython_debug/
 # Lokale Konfiguration von KidsCompass (nicht ins Repo)
 kidscompass_config.json
 kidscompass_config.json.bak
+kidscompass_report.pdf
+child_a_pie.png
+child_b_pie.png
+report.txt
