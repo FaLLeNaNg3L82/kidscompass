@@ -9,6 +9,25 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self._ensure_tables()
 
+    def export_to_sql(self, filename: str):
+        """Dump aller Tabellen als reine SQL-Statements."""
+        with open(filename, 'w', encoding='utf-8') as f:
+            for line in self.conn.iterdump():
+                f.write(f"{line}\n")
+
+    def import_from_sql(self, filename: str):
+        """Alte Tabellen drop­pen, Dump einlesen und ausführen."""
+        cur = self.conn.cursor()
+        for tbl in ('visit_status', 'overrides', 'patterns'):
+            cur.execute(f"DROP TABLE IF EXISTS {tbl}")
+        self.conn.commit()
+
+        with open(filename, 'r', encoding='utf-8') as f:
+            script = f.read()
+        self.conn.executescript(script)
+        self.conn.commit()
+
+
     def _ensure_tables(self):
         cur = self.conn.cursor()
         # Muster-Tabellen mit optionalem Endedatum

@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTabWidget, QCalendarWidget, QCheckBox, QPushButton, QLabel,
     QSpinBox, QListWidget, QListWidgetItem, QMessageBox, QDateEdit,
-    QComboBox, QGroupBox, QRadioButton, QGridLayout, QTextEdit
+    QComboBox, QGroupBox, QRadioButton, QGridLayout, QTextEdit, QFileDialog
 )
 
 from PySide6.QtGui import QTextCharFormat, QBrush, QColor
@@ -157,6 +157,47 @@ class ExportTab(QWidget):
         self.btn_export = QPushButton("Export starten")
         layout.addWidget(self.btn_export)
         self.btn_export.clicked.connect(self.parent.on_export)
+
+        # --- Backup / Restore ---
+        hl = QHBoxLayout()
+        btn_backup  = QPushButton("DB Backup")
+        btn_restore = QPushButton("DB Restore")
+        hl.addWidget(btn_backup)
+        hl.addWidget(btn_restore)
+        layout.addLayout(hl)
+
+        btn_backup.clicked.connect(self.on_backup)
+        btn_restore.clicked.connect(self.on_restore)        
+
+    def on_backup(self):
+        fn, _ = QFileDialog.getSaveFileName(self, "Backup speichern als", filter="SQL-Datei (*.sql)")
+        if not fn:
+            return
+        try:
+            self.parent.db.export_to_sql(fn)
+            QMessageBox.information(self, "Backup", f"Datenbank erfolgreich exportiert nach:\n{fn}")
+        except Exception as e:
+            QMessageBox.critical(self, "Backup-Fehler", str(e))
+
+    def on_restore(self):
+        fn, _ = QFileDialog.getOpenFileName(self, "Backup wiederherstellen", filter="SQL-Datei (*.sql)")
+        if not fn:
+            return
+        confirm = QMessageBox.question(
+            self, "Restore bestätigen",
+            "Achtung: Alle aktuellen Einträge werden überschrieben.\nWeiter?")
+        if confirm != QMessageBox.Yes:
+            return
+        try:
+            self.parent.db.import_from_sql(fn)
+            # Nach dem Restore alle In-Memory-Caches neu laden:
+            self.parent.visit_status = self.parent.db.load_all_status()
+            self.parent.patterns     = self.parent.db.load_patterns()
+            self.parent.overrides    = self.parent.db.load_overrides()
+            self.parent.refresh_calendar()
+            QMessageBox.information(self, "Restore", "Datenbank erfolgreich wiederhergestellt.")
+        except Exception as e:
+            QMessageBox.critical(self, "Restore-Fehler", str(e))
 
 class StatisticsTab(QWidget):
     def __init__(self, parent):
