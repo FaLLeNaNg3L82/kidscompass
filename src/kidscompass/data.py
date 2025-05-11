@@ -3,14 +3,15 @@ from datetime import date
 from kidscompass.models import VisitPattern, OverridePeriod, RemoveOverride, VisitStatus
 
 class Database:
-    def __init__(self, db_path="kidscompass.db"):
-        self.conn = sqlite3.connect(db_path)
+    def __init__(self, db_path: str = None):
+        self.db_path = db_path or "kidscompass.db"
+        self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
         self._ensure_tables()
 
     def _ensure_tables(self):
         cur = self.conn.cursor()
-        # Muster-Tabellen
+        # Muster-Tabellen mit optionalem Endedatum
         cur.execute("""
         CREATE TABLE IF NOT EXISTS patterns (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18,6 +19,12 @@ class Database:
           interval_weeks INTEGER NOT NULL,
           start_date TEXT NOT NULL
         )""")
+        # Füge end_date hinzu, falls noch nicht vorhanden
+        cur.execute("PRAGMA table_info(patterns)")
+        cols = [row['name'] for row in cur.fetchall()]
+        if 'end_date' not in cols:
+            cur.execute("ALTER TABLE patterns ADD COLUMN end_date TEXT")
+
         # Overrides: Add und Remove
         cur.execute("""
         CREATE TABLE IF NOT EXISTS overrides (
@@ -40,11 +47,13 @@ class Database:
     # Muster-Methoden
     def load_patterns(self):
         cur = self.conn.cursor()
-        cur.execute("SELECT id, weekdays, interval_weeks, start_date FROM patterns")
+        cur.execute("SELECT id, weekdays, interval_weeks, start_date, end_date FROM patterns")
         patterns = []
         for row in cur.fetchall():
             wd = [int(x) for x in row["weekdays"].split(",") if x]
-            pat = VisitPattern(wd, row["interval_weeks"], date.fromisoformat(row["start_date"]))
+            start = date.fromisoformat(row["start_date"])
+            end = date.fromisoformat(row["end_date"]) if row["end_date"] else None
+            pat = VisitPattern(wd, row["interval_weeks"], start, end)
             pat.id = row["id"]
             patterns.append(pat)
         return patterns
@@ -52,16 +61,17 @@ class Database:
     def save_pattern(self, pat: VisitPattern):
         wd_text = ",".join(str(d) for d in pat.weekdays)
         sd = pat.start_date.isoformat()
+        ed = pat.end_date.isoformat() if getattr(pat, "end_date", None) else None
         cur = self.conn.cursor()
-        if hasattr(pat, 'id'):
+        if hasattr(pat, "id"):
             cur.execute(
-                "UPDATE patterns SET weekdays=?, interval_weeks=?, start_date=? WHERE id=?",
-                (wd_text, pat.interval_weeks, sd, pat.id)
+                "UPDATE patterns SET weekdays=?, interval_weeks=?, start_date=?, end_date=? WHERE id=?",
+                (wd_text, pat.interval_weeks, sd, ed, pat.id)
             )
         else:
             cur.execute(
-                "INSERT INTO patterns (weekdays, interval_weeks, start_date) VALUES (?,?,?)",
-                (wd_text, pat.interval_weeks, sd)
+                "INSERT INTO patterns (weekdays, interval_weeks, start_date, end_date) VALUES (?,?,?,?)",
+                (wd_text, pat.interval_weeks, sd, ed)
             )
             pat.id = cur.lastrowid
         self.conn.commit()
@@ -79,11 +89,17 @@ class Database:
             f = date.fromisoformat(row["from_date"])
             t = date.fromisoformat(row["to_date"])
             if row["type"] == 'add':
-                # lade zugehöriges Muster
                 cur2 = self.conn.cursor()
-                cur2.execute("SELECT weekdays, interval_weeks, start_date FROM patterns WHERE id=?", (row["pattern_id"],))
+                cur2.execute(
+                    "SELECT weekdays, interval_weeks, start_date, end_date FROM patterns WHERE id=?",
+                    (row["pattern_id"],)
+                )
                 prow = cur2.fetchone()
-                pat = VisitPattern([int(x) for x in prow["weekdays"].split(",")], prow["interval_weeks"], date.fromisoformat(prow["start_date"]))
+                wd = [int(x) for x in prow["weekdays"].split(",") if x]
+                start = date.fromisoformat(prow["start_date"])
+                end = date.fromisoformat(prow["end_date"]) if prow["end_date"] else None
+                pat = VisitPattern(wd, prow["interval_weeks"], start, end)
+                pat.id = row["pattern_id"]
                 ov = OverridePeriod(f, t, pat)
             else:
                 ov = RemoveOverride(f, t)
@@ -96,7 +112,6 @@ class Database:
         from_date = ov.from_date.isoformat()
         to_date = ov.to_date.isoformat()
         if isinstance(ov, OverridePeriod):
-            # stelle sicher, dass das Muster existiert
             self.save_pattern(ov.pattern)
             pid = ov.pattern.id
             typ = 'add'
@@ -136,11 +151,14 @@ class Database:
         day = vs.day.isoformat()
         a = int(vs.present_child_a)
         b = int(vs.present_child_b)
-        # Upsert
         cur.execute(
             "REPLACE INTO visit_status (day, present_child_a, present_child_b) VALUES (?,?,?)",
             (day, a, b)
         )
+        self.conn.commit()
+
+    def delete_status(self, day: date):
+        self.conn.execute("DELETE FROM visit_status WHERE day=?", (day.isoformat(),))
         self.conn.commit()
 
     def clear_status(self):
