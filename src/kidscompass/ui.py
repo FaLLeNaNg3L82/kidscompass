@@ -34,11 +34,23 @@ from kidscompass.statistics import count_missing_by_weekday, summarize_visits
 
 # Hilfsfunktion für Tortendiagramme
 def create_pie_chart(values: list, labels: list, filename: str):
+    total = sum(values)
+    # Wenn keine Daten da sind, lege ein kleines Platzhalter‐Bild an
+    if total == 0:
+        fig, ax = plt.subplots()
+        ax.text(0.5, 0.5, "Keine Daten", ha="center", va="center", fontsize=14)
+        ax.axis("off")
+        fig.savefig(filename, bbox_inches="tight")
+        plt.close(fig)
+        return
+
+    # Ansonsten ganz normal zeichnen
     fig, ax = plt.subplots()
     ax.pie(values, labels=labels, autopct="%1.1f%%")
     ax.axis("equal")
     fig.savefig(filename, bbox_inches="tight")
     plt.close(fig)
+
 
 class SettingsTab(QWidget):
     def __init__(self, parent):
@@ -335,10 +347,35 @@ class MainWindow(QMainWindow):
         c = canvas.Canvas('kidscompass_report.pdf',pagesize=letter)
         w,h = letter; y = h-50
         c.setFont('Helvetica-Bold',14); c.drawString(50,y,'KidsCompass Report'); y-=30
-        c.setFont('Helvetica',10); c.drawString(50,y,f"Zeitraum: {df} - {dt}"); y-=20
-        for d,st in deviations:
-            if y<100: c.showPage(); y=h-50
-            c.drawString(60,y,f"{d.isoformat()}: {st}"); y-=15
+        c.setFont('Helvetica',10)
+        c.drawString(50, y,    f"Zeitraum: {df.isoformat()} bis {dt.isoformat()}"); y -= 20
+        c.drawString(50, y,    f"Geplante Umgänge: {stats['total']}");             y -= 20
+        c.drawString(50, y,    f"Abweichungstage: {len(deviations)}");              y -= 20
+        # Prozentzahlen berechnen
+        total = stats['total']
+        dev = len(deviations)
+        pct_dev   = round(dev   / total * 100, 1) if total else 0.0
+        miss_a    = stats['missed_a']
+        pct_a     = round(miss_a / total * 100, 1) if total else 0.0
+        miss_b    = stats['missed_b']
+        pct_b     = round(miss_b / total * 100, 1) if total else 0.0
+
+        # Ausgabe
+        c.drawString(50, y, f"Abweichungstage: {dev} ({pct_dev}%)"); y -= 20
+        c.drawString(50, y, f"Kind A Abweichungstage: {miss_a} ({pct_a}%)"); y -= 15
+        c.drawString(50, y, f"Kind B Abweichungstage: {miss_b} ({pct_b}%)"); y -= 20
+
+
+        # Liste der Abweichungen mit Wochentag
+        weekdays = ["Mo","Di","Mi","Do","Fr","Sa","So"]
+        for d, st in deviations:
+            if y < 100:
+                c.showPage()
+                y = h - 50
+            wd = weekdays[d.weekday()]
+            c.drawString(60, y, f"{d.isoformat()} ({wd}): {st}")
+            y -= 15
+
         c.showPage(); size=200
         c.drawImage(png_a,50,y-size,width=size,height=size)
         c.drawImage(png_b,260,y-size,width=size,height=size)
