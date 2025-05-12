@@ -1,8 +1,8 @@
 import sys
-from datetime import date
+from datetime import date, timedelta
+from typing import List, Union
 
-import sys
-from datetime import date
+from .models import VisitPattern, OverridePeriod, RemoveOverride
 
 import matplotlib.pyplot as plt
 from reportlab.lib.pagesizes import letter
@@ -273,10 +273,18 @@ class MainWindow(QMainWindow):
         cal = self.tab2.calendar
         cal.setDateTextFormat(QDate(), QTextCharFormat())
         today = date.today()
-        planned = apply_overrides(
-            sum((generate_standard_days(p, today.year) for p in self.patterns), []),
-            self.overrides
-        )
+
+        # 1) Generiere für jedes Pattern alle Termine zwischen start_date.year ... end_date.year (oder bis heute.year)
+        raw: List[date] = []
+        for p in self.patterns:
+            start_y = p.start_date.year
+            last_y  = p.end_date.year if p.end_date else today.year
+            for yr in range(start_y, last_y + 1):
+                raw.extend(generate_standard_days(p, yr))
+
+        # 2) Overrides anwenden
+        planned = apply_overrides(raw, self.overrides)
+      
         for d in planned:
             if d <= today:
                 qd = QDate(d.year,d.month,d.day)

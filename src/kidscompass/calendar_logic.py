@@ -4,19 +4,20 @@ from .models import VisitPattern, OverridePeriod, RemoveOverride, VisitStatus
 
 
 def generate_standard_days(pattern: VisitPattern, year: int) -> List[date]:
-    """Erzeuge alle Besuchsdaten im Jahr nach weekday-Liste, Wochen-Intervall
-       und optionalem end_date."""
+    """Erzeuge alle Besuchsdaten im Jahr nach weekday-Liste, Wochen-Intervall und respect end_date."""
     start_of_year = date(year, 1, 1)
     end_of_year   = date(year, 12, 31)
 
     # Ab dem späteren Datum starten
     cursor = max(start_of_year, pattern.start_date)
-    dates: List[date] = []
 
+    dates: List[date] = []
+    # Für jede gewählte Wochentags-Zahl
     for wd in pattern.weekdays:
         # ersten Termin dieses Wochentags ermitteln
         delta_days = (wd - cursor.weekday() + 7) % 7
         current = cursor + timedelta(days=delta_days)
+
 
         # in Intervall-Schritten bis Jahresende und bis end_date (falls gesetzt)
         while current <= end_of_year and (pattern.end_date is None or current <= pattern.end_date):
@@ -24,6 +25,10 @@ def generate_standard_days(pattern: VisitPattern, year: int) -> List[date]:
             current += timedelta(weeks=pattern.interval_weeks)
 
     # sort & dedupe
+    # jetzt noch nach end_date filtern (falls gesetzt)
+    if pattern.end_date is not None:
+        dates = [d for d in dates if d <= pattern.end_date]
+
     return sorted(set(dates))
 
 
