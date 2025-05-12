@@ -299,11 +299,12 @@ class MainWindow(QMainWindow):
         iv   = self.tab1.interval.value()
         sd   = self.tab1.start_date.date().toPython()
         # if “bis unendlich” is checked, end_date stays None
+        # if “bis unendlich” is checked, end_date stays None
         if self.tab1.chk_infinite.isChecked():
             ed = None
         else:
             ed = self.tab1.end_date.date().toPython()
-        pat = VisitPattern(days, iv, sd, ed)
+        pat = VisitPattern(days, iv, sd, ed)      # ← new line
 
         # 4) Speichere in der DB
         self.db.save_pattern(pat)
