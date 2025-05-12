@@ -295,14 +295,26 @@ class MainWindow(QMainWindow):
                 cal.setDateTextFormat(qd, fmt)
 
     def on_add_pattern(self):
-        days = [i for i,cb in self.tab1.weekday_checks if cb.isChecked()]
+        days = [i for i, cb in self.tab1.weekday_checks if cb.isChecked()]
         iv   = self.tab1.interval.value()
         sd   = self.tab1.start_date.date().toPython()
-        pat  = VisitPattern(days,iv,sd)
+        # if “bis unendlich” is checked, end_date stays None
+        if self.tab1.chk_infinite.isChecked():
+            ed = None
+        else:
+            ed = self.tab1.end_date.date().toPython()
+        pat = VisitPattern(days, iv, sd, ed)
+
+        # 4) Speichere in der DB
         self.db.save_pattern(pat)
+
+        # 5) Füge in-memory und UI hinzu
         self.patterns.append(pat)
-        item = QListWidgetItem(str(pat)); item.setData(Qt.UserRole, pat)
+        item = QListWidgetItem(str(pat))
+        item.setData(Qt.UserRole, pat)
         self.tab1.entry_list.addItem(item)
+
+        # 6) Kalender neu rendern
         self.refresh_calendar()
 
     def on_add_override(self):
