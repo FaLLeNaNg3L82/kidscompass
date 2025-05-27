@@ -18,7 +18,7 @@ Welcome, and thank you for considering contributing to KidsCompass! This guide w
 
 ## 📝 Filing Issues and PRs
 
-1. **Check existing issues**: Avoid duplicates by searching [Issues](https://github.com/YourUser/kidscompass/issues).
+1. **Check existing issues**: Avoid duplicates by searching [Issues](https://github.com/FaLLeNaNg3L82/kidscompass/issues).
 2. **Open an issue**:
 
    * Title: short imperative description (e.g., "Add end date to pattern entries").
@@ -57,8 +57,8 @@ Feel free to copy and adapt the text below when reaching out for help:
 >
 > If you have experience in Python, Qt (PySide6), SQLite, or reporting/visualization, I’d love to collaborate. No paid contract—just a fellow open‑source enthusiast aiming to help parents stay connected with their kids.
 >
-> You can find the repo here: [https://github.com/YourUser/kidscompass](https://github.com/YourUser/kidscompass)
-> Issues & roadmap: [https://github.com/YourUser/kidscompass/issues](https://github.com/YourUser/kidscompass/issues)
+> You can find the repo here: [https://github.com/FaLLeNaNg3L82/kidscompass](https://github.com/FaLLeNaNg3L82/kidscompass)
+> Issues & roadmap: [https://github.com/FaLLeNaNg3L82/kidscompass/issues](https://github.com/FaLLeNaNg3L82/kidscompass/issues)
 >
 > Thank you for reading, and I hope to work with you!
 
@@ -66,8 +66,8 @@ Feel free to copy and adapt the text below when reaching out for help:
 
 ## 📚 Useful Links
 
-* **GitHub Issues:** [https://github.com/YourUser/kidscompass/issues](https://github.com/YourUser/kidscompass/issues)
-* **Discussions:** [https://github.com/YourUser/kidscompass/discussions](https://github.com/YourUser/kidscompass/discussions)
+* **GitHub Issues:** [https://github.com/FaLLeNaNg3L82/kidscompass/issues](https://github.com/FaLLeNaNg3L82/kidscompass/issues)
+* **Discussions:** [https://github.com/FaLLeNaNg3L82/kidscompass/discussions](https://github.com/FaLLeNaNg3L82/kidscompass/discussions)
 * **License:** MIT
 * **Docs & Roadmap:** [ROADMAP.md](./ROADMAP.md)
 
