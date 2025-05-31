@@ -43,6 +43,9 @@ COLOR_PLANNED = '#A0C4FF'
 COLOR_BOTH_ABSENT = '#FFADAD'
 COLOR_A_ABSENT = '#FFD97D'
 COLOR_B_ABSENT = '#A0FFA0'
+COLOR_BOTH_PRESENT = COLOR_B_ABSENT  # Für Konsistenz, beide da = grün
+COLOR_AT_LEAST_ONE_ABSENT = COLOR_A_ABSENT  # Mindestens ein Kind fehlt = gelb
+COLOR_BOTH_MISSING = '#FF0000'  # Beide fehlen = rot
 
 
 def qdate_to_date(qdate):
@@ -366,14 +369,26 @@ class ExportWorker(QObject):
                     self.error.emit(f"Fehler: Bilddatei '{f}' nicht gefunden. Bitte zuerst Statistik berechnen.")
                     return
             try:
-                create_pie_chart([stats['total']-stats['missed_a'],stats['missed_a']],['Anwesend','Fehlend'],png_a)
-                create_pie_chart([stats['total']-stats['missed_b'],stats['missed_b']],['Anwesend','Fehlend'],png_b)
-                # Neues 3-Felder-Diagramm mit roter Farbe für 'Beide fehlen'
-                create_pie_chart(
-                    [stats['both_present'], stats['total'] - stats['both_present'] - stats['both_missing'], stats['both_missing']],
-                    ['Beide da', 'Mindestens ein Kind fehlt', 'Beide fehlen'],
+                # Farben für alle Diagramme konsistent verwenden
+                colors = [COLOR_B_ABSENT, COLOR_A_ABSENT]  # grün, gelb
+                create_pie_chart([stats['total']-stats['missed_a'],stats['missed_a']],['Anwesend','Fehlend'],png_a, colors=colors)
+                create_pie_chart([stats['total']-stats['missed_b'],stats['missed_b']],['Anwesend','Fehlend'],png_b, colors=colors)
+                # Werte für das "both"-Diagramm
+                beide_da = stats['both_present']
+                mindestens_ein_kind_fehlt = stats['total'] - stats['both_present'] - stats['both_missing']
+                beide_fehlen = stats['both_missing']
+                # Prozentwert für "mindestens 1 Kind fehlt oder beide fehlen"
+                mindestens_einer_oder_beide = mindestens_ein_kind_fehlt + beide_fehlen
+                pct_mindestens_einer_oder_beide = round(mindestens_einer_oder_beide / stats['total'] * 100, 1) if stats['total'] else 0.0
+                # Farben: grün, gelb, rot
+                colors_both = [COLOR_B_ABSENT, COLOR_A_ABSENT, COLOR_BOTH_MISSING]
+                wedges, texts, autotexts = create_pie_chart(
+                    [beide_da, mindestens_ein_kind_fehlt, beide_fehlen],
+                    ['Beide da', f'Mind. 1 fehlt ({pct_mindestens_einer_oder_beide}%)', 'Beide fehlen'],
                     png_both,
-                    colors=['#A0FFA0', '#FFD97D', '#FF0000']
+                    colors=colors_both,
+                    return_handles=True,
+                    subtitle="Beide"
                 )
             except Exception as e:
                 logging.error(f"Fehler bei create_pie_chart: {e}")
@@ -429,7 +444,7 @@ class ExportWorker(QObject):
             c.setFont('Helvetica-Bold', 12)
             c.drawCentredString(x_left + size / 2, y_top + 15, 'Kind A')
             c.drawCentredString(x_right + size / 2, y_top + 15, 'Kind B')
-            c.drawCentredString(x_center, y_bottom + 15, 'Beide')
+            # c.drawCentredString(x_center, y_bottom + 15, 'Beide')  # Entfernt, da Beschriftung nun im Diagramm
             # Zeichne zwei Diagramme oben
             c.drawImage(png_a, x_left, y_top - size, width=size, height=size)
             c.drawImage(png_b, x_right, y_top - size, width=size, height=size)
@@ -706,10 +721,14 @@ class MainWindow(QMainWindow):
         # Stoppe Threads sauber vor dem Schließen
         for thread_attr in ['export_thread', 'backup_thread', 'restore_thread', 'worker_thread']:
             thread = getattr(self, thread_attr, None)
-            if thread and thread.isRunning():
-                thread.quit()
-                thread.wait()
-
+            if thread is not None:
+                try:
+                    if thread.isRunning():
+                        thread.quit()
+                        thread.wait()
+                except RuntimeError:
+                    pass  # Thread-Objekt wurde bereits gelöscht
+                setattr(self, thread_attr, None)
         # Schließe die Datenbankverbindung, falls vorhanden
         if hasattr(self, 'db') and self.db:
             self.db.close()
