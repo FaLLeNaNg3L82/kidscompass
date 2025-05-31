@@ -4,7 +4,7 @@ import json
 from datetime import date
 from typing import List
 
-from .models import VisitPattern, OverridePeriod, VisitStatus
+from .models import VisitPattern, OverridePeriod, VisitStatus, RemoveOverride
 from .calendar_logic import generate_standard_days, apply_overrides
 
 CONFIG_FILE = "kidscompass_config.json"
@@ -40,19 +40,19 @@ def run_wizard():
         if input("Weiteren Rhythmus hinzufügen? (j/n) ").lower() != "j":
             break
 
-# 2) Overrides erfassen
-overrides = []
-if input("Urlaubs-Overrides hinzufügen? (j/n) ").lower() == "j":
-    while True:
-        mode = input("  Welcher Typ? [1] Ersatz-Pattern, [2] Entfernen aller Tage: ")
-        if mode == "1":
-            overrides.append(input_override())            # wie bisher
-        else:
-            f = date.fromisoformat(input("  Von (YYYY-MM-DD): "))
-            t = date.fromisoformat(input("  Bis (YYYY-MM-DD): "))
-            overrides.append(RemoveOverride(from_date=f, to_date=t))
-        if input("Weiteren Override? (j/n) ").lower() != "j":
-            break
+    # 2) Overrides erfassen
+    overrides = []
+    if input("Urlaubs-Overrides hinzufügen? (j/n) ").lower() == "j":
+        while True:
+            mode = input("  Welcher Typ? [1] Ersatz-Pattern, [2] Entfernen aller Tage: ")
+            if mode == "1":
+                overrides.append(input_override())            # wie bisher
+            else:
+                f = date.fromisoformat(input("  Von (YYYY-MM-DD): "))
+                t = date.fromisoformat(input("  Bis (YYYY-MM-DD): "))
+                overrides.append(RemoveOverride(from_date=f, to_date=t))
+            if input("Weiteren Override? (j/n) ").lower() != "j":
+                break
 
     # 3) Termine generieren
     std_days = []
