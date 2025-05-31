@@ -1,6 +1,21 @@
 # src/kidscompass/charts.py
 
 import matplotlib.pyplot as plt
+from PySide6.QtCore import QObject
+
+class BackupWorker(QObject):
+    def __init__(self, db_path, fn):
+        super().__init__()
+        self.db_path = db_path
+        self.fn = fn
+
+    def run(self):
+        db = Database(self.db_path)  # Neue Verbindung im Worker-Thread
+        try:
+            db.export_to_sql(self.fn)
+            self.finished.emit(self.fn)
+        finally:
+            db.close()
 
 def create_pie_chart(values: list[int], labels: list[str], filename: str, colors: list[str] = None, return_handles: bool = False, subtitle: str = None):
     """
