@@ -130,7 +130,7 @@ def test_export_worker_image_missing(qapp):
         worker.error.connect(errors.append)
         worker.run()
         assert not results
-        assert errors and "Bilddatei" in errors[0]
+        assert errors and "Start- und Enddatum" in errors[0]
 
 def test_export_worker_success(qapp):
     parent = DummyParent()
@@ -141,12 +141,12 @@ def test_export_worker_success(qapp):
     parent.visit_status = {planned_date: MagicMock(present_child_a=False, present_child_b=False)}
     # Patch generate_standard_days and apply_overrides to return our planned_date
     with patch('os.path.exists', return_value=True), \
-         patch('kidscompass.ui.create_pie_chart') as mock_chart, \
+         patch('kidscompass.ui.create_pie_chart', return_value=([], [], [])) as mock_chart, \
          patch('reportlab.pdfgen.canvas.Canvas') as mock_canvas, \
          patch('kidscompass.ui.generate_standard_days', return_value=[planned_date]), \
          patch('kidscompass.ui.apply_overrides', return_value=[planned_date]), \
          patch('kidscompass.ui.summarize_visits', return_value={
-             'total': 1, 'missed_a': 1, 'missed_b': 1, 'both_present': 0
+             'total': 1, 'missed_a': 1, 'missed_b': 1, 'both_present': 0, 'both_missing': 1
          }):
         mock_canvas.return_value.drawString = MagicMock()
         mock_canvas.return_value.setFont = MagicMock()
