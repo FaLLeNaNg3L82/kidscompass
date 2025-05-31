@@ -12,6 +12,12 @@ class VisitPattern:
     start_date: date = field(default_factory=date.today)
     end_date: Optional[date] = None
 
+    def __str__(self):
+        weekdays = [['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][d] for d in sorted(self.weekdays)]
+        days = ', '.join(weekdays)
+        end = f" bis {self.end_date}" if self.end_date else ""
+        return f"Alle {self.interval_weeks} Wochen an {days} (ab {self.start_date}{end})"
+
 @dataclass
 class OverridePeriod:
     """Zeitraum, in dem Urlaubsumgänge gelten und das Standard-Pattern überschreiben."""

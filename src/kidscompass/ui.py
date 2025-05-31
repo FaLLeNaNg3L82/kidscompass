@@ -246,6 +246,10 @@ class MainWindow(QMainWindow):
         self.overrides = []
         self.visit_status = self.db.load_all_status()
 
+        # Stelle sicher, dass die DB-Verbindung geschlossen wird
+        app = QApplication.instance()
+        app.aboutToQuit.connect(self.cleanup)
+
         tabs = QTabWidget(); self.setCentralWidget(tabs)
         self.tab1 = SettingsTab(self); self.tab2 = StatusTab(self)
         self.tab3 = ExportTab(self); self.tab4 = StatisticsTab(self)
@@ -460,6 +464,11 @@ class MainWindow(QMainWindow):
         c.drawImage(png_b,260,y-size,width=size,height=size)
         c.drawImage(png_both,470,y-size,width=size,height=size)
         c.save(); QMessageBox.information(self,'Export','PDF erstellt')
+
+    def cleanup(self):
+        """Wird beim Beenden der Anwendung aufgerufen"""
+        if hasattr(self, 'db'):
+            self.db.close()
 
 def main():
     app = QApplication(sys.argv)
