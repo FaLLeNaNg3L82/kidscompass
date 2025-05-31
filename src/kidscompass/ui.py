@@ -337,9 +337,9 @@ class ExportWorker(QObject):
 
     def run(self):
         try:
-            today = date.today()
+            years = range(self.df.year, self.dt.year + 1)
             all_planned = apply_overrides(
-                sum((generate_standard_days(p, today.year) for p in self.patterns), []),
+                sum((generate_standard_days(p, year) for p in self.patterns for year in years), []),
                 self.overrides
             )
             planned = [d for d in all_planned if self.df <= d <= self.dt]
@@ -360,9 +360,14 @@ class ExportWorker(QObject):
                 if not os.path.exists(f):
                     self.error.emit(f"Fehler: Bilddatei '{f}' nicht gefunden. Bitte zuerst Statistik berechnen.")
                     return
-            create_pie_chart([stats['total']-stats['missed_a'],stats['missed_a']],['Anwesend','Fehlend'],png_a)
-            create_pie_chart([stats['total']-stats['missed_b'],stats['missed_b']],['Anwesend','Fehlend'],png_b)
-            create_pie_chart([stats['both_present'],stats['total']-stats['both_present']],['Beide da','Mindestens ein Kind fehlt'],png_both)
+            try:
+                create_pie_chart([stats['total']-stats['missed_a'],stats['missed_a']],['Anwesend','Fehlend'],png_a)
+                create_pie_chart([stats['total']-stats['missed_b'],stats['missed_b']],['Anwesend','Fehlend'],png_b)
+                create_pie_chart([stats['both_present'],stats['total']-stats['both_present']],['Beide da','Mindestens ein Kind fehlt'],png_both)
+            except Exception as e:
+                logging.error(f"Fehler bei create_pie_chart: {e}")
+                self.error.emit(f"Fehler bei Diagrammerstellung: {e}")
+                return
             c = canvas.Canvas('kidscompass_report.pdf',pagesize=letter)
             w,h = letter; y = h-50
             c.setFont('Helvetica-Bold',14); c.drawString(50,y,'KidsCompass Report'); y-=30
