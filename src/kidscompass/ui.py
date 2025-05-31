@@ -1,13 +1,14 @@
 import sys
-from datetime import date, timedelta
-from typing import List, Union
+from datetime import date
+from typing import List
 import os
+import logging
 
 import matplotlib
 matplotlib.use("Agg")
 
 from .models import VisitPattern, OverridePeriod, RemoveOverride, VisitStatus
-import matplotlib.pyplot as plt
+from kidscompass.charts import create_pie_chart
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from PySide6.QtWidgets import (
@@ -44,29 +45,34 @@ COLOR_A_ABSENT = '#FFD97D'
 COLOR_B_ABSENT = '#A0FFA0'
 
 
-# Hilfsfunktion für Tortendiagramme
-def create_pie_chart(values: list, labels: list, filename: str):
-    total = sum(values)
-    # Wenn keine Daten da sind, lege ein kleines Platzhalter‐Bild an
-    if total == 0:
-        fig, ax = plt.subplots()
-        ax.text(0.5, 0.5, "Keine Daten", ha="center", va="center", fontsize=14)
-        ax.axis("off")
-        fig.savefig(filename, bbox_inches="tight")
-        plt.close(fig)
-        return
-
-    # Ansonsten ganz normal zeichnen
-    fig, ax = plt.subplots()
-    ax.pie(values, labels=labels, autopct="%1.1f%%")
-    ax.axis("equal")
-    fig.savefig(filename, bbox_inches="tight")
-    plt.close(fig)
-
-
 def qdate_to_date(qdate):
     """Hilfsfunktion: QDate -> datetime.date"""
     return qdate.toPython() if hasattr(qdate, 'toPython') else date(qdate.year(), qdate.month(), qdate.day())
+
+# === UI Text Constants ===
+BACKUP_BTN_TEXT = "DB Backup"
+RESTORE_BTN_TEXT = "DB Restore"
+EXPORT_BTN_TEXT = "Export starten"
+PATTERN_BTN_TEXT = "Pattern hinzufügen"
+OVERRIDE_BTN_TEXT = "Override hinzufügen"
+DELETE_BTN_TEXT = "Eintrag löschen"
+RESET_BTN_TEXT = "Alle zurücksetzen"
+CALENDAR_LABEL = "📅 Besuchsmuster:"
+CHILD_LABEL = "Kinder:"
+INTERVAL_LABEL = "Intervall (Wochen):"
+FROM_LABEL = "Von:"
+TO_LABEL = "Bis:"
+INFINITE_LABEL = "Bis unendlich"
+STATISTICS_BTN_TEXT = "Statistik berechnen"
+
+# Hilfsfunktion für Kalender-Formatierung
+from PySide6.QtGui import QTextCharFormat, QBrush, QColor
+
+def set_date_format(calendar, date_obj, color_hex):
+    qdate = QDate(date_obj.year, date_obj.month, date_obj.day)
+    fmt = QTextCharFormat()
+    fmt.setBackground(QBrush(QColor(color_hex)))
+    calendar.setDateTextFormat(qdate, fmt)
 
 class SettingsTab(QWidget):
     def __init__(self, parent):
@@ -75,7 +81,7 @@ class SettingsTab(QWidget):
         layout = QVBoxLayout(self)
 
         # Besuchsmuster
-        layout.addWidget(QLabel("📅 Besuchsmuster:"))
+        layout.addWidget(QLabel(CALENDAR_LABEL))
         wd_layout = QHBoxLayout()
         self.weekday_checks = []
         for i, day in enumerate(['Mo','Di','Mi','Do','Fr','Sa','So']):
@@ -86,18 +92,18 @@ class SettingsTab(QWidget):
 
         # Intervall, Start- und Enddatum
         param_layout = QHBoxLayout()
-        param_layout.addWidget(QLabel("Intervall (Wochen):"))
+        param_layout.addWidget(QLabel(INTERVAL_LABEL))
         self.interval = QSpinBox(); self.interval.setRange(1, 52); self.interval.setValue(1)
         param_layout.addWidget(self.interval)
-        param_layout.addWidget(QLabel("Ab Datum:"))
+        param_layout.addWidget(QLabel(FROM_LABEL))
         self.start_date = QDateEdit(QDate(date.today().year, 1, 1)); self.start_date.setCalendarPopup(True)
         param_layout.addWidget(self.start_date)
-        param_layout.addWidget(QLabel("Bis Datum:"))
+        param_layout.addWidget(QLabel(TO_LABEL))
         self.end_date = QDateEdit(QDate(date.today().year, 12, 31)); self.end_date.setCalendarPopup(True)
         param_layout.addWidget(self.end_date)
-        self.chk_infinite = QCheckBox("Bis unendlich")
+        self.chk_infinite = QCheckBox(INFINITE_LABEL)
         param_layout.addWidget(self.chk_infinite)
-        self.btn_pattern = QPushButton("Pattern hinzufügen")
+        self.btn_pattern = QPushButton(PATTERN_BTN_TEXT)
         param_layout.addWidget(self.btn_pattern)
         layout.addLayout(param_layout)
 
@@ -109,14 +115,14 @@ class SettingsTab(QWidget):
         self.ov_remove = QRadioButton("Urlaubs-Remove")
         ov_layout.addWidget(self.ov_add); ov_layout.addWidget(self.ov_remove)
         date_layout = QHBoxLayout()
-        date_layout.addWidget(QLabel("Von:"))
+        date_layout.addWidget(QLabel(FROM_LABEL))
         self.ov_from = QDateEdit(QDate.currentDate()); self.ov_from.setCalendarPopup(True)
         date_layout.addWidget(self.ov_from)
-        date_layout.addWidget(QLabel("Bis:"))
+        date_layout.addWidget(QLabel(TO_LABEL))
         self.ov_to = QDateEdit(QDate.currentDate()); self.ov_to.setCalendarPopup(True)
         date_layout.addWidget(self.ov_to)
         ov_layout.addLayout(date_layout)
-        self.btn_override = QPushButton("Override hinzufügen")
+        self.btn_override = QPushButton(OVERRIDE_BTN_TEXT)
         ov_layout.addWidget(self.btn_override)
         layout.addWidget(ov_group)
 
@@ -125,7 +131,7 @@ class SettingsTab(QWidget):
         self.entry_list = QListWidget()
         layout.addWidget(self.entry_list)
         btns = QHBoxLayout()
-        self.btn_delete = QPushButton("Eintrag löschen")
+        self.btn_delete = QPushButton(DELETE_BTN_TEXT)
         btns.addWidget(self.btn_delete)
         layout.addLayout(btns)
 
@@ -140,13 +146,13 @@ class StatusTab(QWidget):
         self.parent = parent
         layout = QVBoxLayout(self)
 
-        hl = QHBoxLayout(); hl.addWidget(QLabel("Kinder:"))
+        hl = QHBoxLayout(); hl.addWidget(QLabel(CHILD_LABEL))
         self.child_count = QComboBox(); self.child_count.addItems([str(i) for i in range(1,6)])
         hl.addWidget(self.child_count); layout.addLayout(hl)
 
         self.child_checks = []
         self.grid = QGridLayout(); layout.addLayout(self.grid)
-        self.btn_reset = QPushButton("Alle zurücksetzen")
+        self.btn_reset = QPushButton(RESET_BTN_TEXT)
         layout.addWidget(self.btn_reset)
 
         self.calendar = QCalendarWidget(); self.calendar.setGridVisible(True)
@@ -163,28 +169,28 @@ class ExportTab(QWidget):
         layout = QVBoxLayout(self)
 
         hl = QHBoxLayout()
-        hl.addWidget(QLabel("Von:"))
-        self.date_from = QDateEdit(QDate.currentDate()); self.date_from.setCalendarPopup(True)
-        hl.addWidget(self.date_from)
-        hl.addWidget(QLabel("Bis:"))
-        self.date_to = QDateEdit(QDate.currentDate()); self.date_to.setCalendarPopup(True)
-        hl.addWidget(self.date_to)
-        layout.addLayout(hl)
-
-        self.btn_export = QPushButton("Export starten")
-        layout.addWidget(self.btn_export)
-        self.btn_export.clicked.connect(self.parent.on_export)
-
-        # --- Backup / Restore ---
-        hl = QHBoxLayout()
-        btn_backup  = QPushButton("DB Backup")
-        btn_restore = QPushButton("DB Restore")
+        btn_backup  = QPushButton(BACKUP_BTN_TEXT)
+        btn_restore = QPushButton(RESTORE_BTN_TEXT)
         hl.addWidget(btn_backup)
         hl.addWidget(btn_restore)
         layout.addLayout(hl)
 
+        hl2 = QHBoxLayout()
+        hl2.addWidget(QLabel(FROM_LABEL))
+        self.date_from = QDateEdit(QDate.currentDate()); self.date_from.setCalendarPopup(True)
+        hl2.addWidget(self.date_from)
+        hl2.addWidget(QLabel(TO_LABEL))
+        self.date_to = QDateEdit(QDate.currentDate()); self.date_to.setCalendarPopup(True)
+        hl2.addWidget(self.date_to)
+        layout.addLayout(hl2)
+
+        layout.addWidget(QLabel(""))
+        self.btn_export = QPushButton(EXPORT_BTN_TEXT)
+        layout.addWidget(self.btn_export)
+
         btn_backup.clicked.connect(self.on_backup)
-        btn_restore.clicked.connect(self.on_restore)        
+        btn_restore.clicked.connect(self.on_restore)
+        self.btn_export.clicked.connect(self.parent.on_export)
 
     def on_backup(self):
         fn, _ = QFileDialog.getSaveFileName(self, BACKUP_TITLE, filter=SQL_FILE_FILTER)
@@ -205,6 +211,7 @@ class ExportTab(QWidget):
         QMessageBox.information(self, BACKUP_SUCCESS_TITLE, BACKUP_SUCCESS_TEXT.format(fn=fn))
 
     def on_backup_error(self, msg):
+        logging.error(f"Backup error: {msg}")
         QMessageBox.critical(self, BACKUP_ERROR_TITLE, msg)
 
     def on_restore(self):
@@ -231,7 +238,24 @@ class ExportTab(QWidget):
         QMessageBox.information(self, RESTORE_SUCCESS_TITLE, RESTORE_SUCCESS_TEXT)
 
     def on_restore_error(self, msg):
+        logging.error(f"Restore error: {msg}")
         QMessageBox.critical(self, RESTORE_ERROR_TITLE, msg)
+
+class StatisticsWorker(QObject):
+    finished = Signal(list)
+    error = Signal(str)
+
+    def __init__(self, db):
+        super().__init__()
+        self.db = db
+
+    def run(self):
+        try:
+            stats = count_missing_by_weekday(self.db)
+            self.finished.emit(stats)
+        except Exception as e:
+            logging.error(f"StatisticsWorker error: {e}")
+            self.error.emit(str(e))
 
 class StatisticsTab(QWidget):
     def __init__(self, parent):
@@ -239,9 +263,9 @@ class StatisticsTab(QWidget):
         self.parent = parent
         layout = QVBoxLayout(self)
 
-        period = QHBoxLayout(); period.addWidget(QLabel("Von:"))
+        period = QHBoxLayout(); period.addWidget(QLabel(FROM_LABEL))
         self.date_from = QDateEdit(QDate.currentDate()); self.date_from.setCalendarPopup(True)
-        period.addWidget(self.date_from); period.addWidget(QLabel("Bis:"))
+        period.addWidget(self.date_from); period.addWidget(QLabel(TO_LABEL))
         self.date_to = QDateEdit(QDate.currentDate()); self.date_to.setCalendarPopup(True)
         period.addWidget(self.date_to); layout.addLayout(period)
 
@@ -259,17 +283,35 @@ class StatisticsTab(QWidget):
         for cb in (self.cb_a_absent,self.cb_b_absent,self.cb_both_absent,self.cb_both_present): sl.addWidget(cb)
         layout.addWidget(status_group)
 
-        self.btn_calc = QPushButton("Statistik berechnen"); layout.addWidget(self.btn_calc)
+        self.btn_calc = QPushButton(STATISTICS_BTN_TEXT); layout.addWidget(self.btn_calc)
         self.result   = QTextEdit(); self.result.setReadOnly(True); layout.addWidget(self.result)
         self.btn_calc.clicked.connect(self.on_calculate)
 
     def on_calculate(self):
-        db = self.parent.db
-        stats = count_missing_by_weekday(db)
+        self.btn_calc.setEnabled(False)
+        self.result.clear()
+        self.worker_thread = QThread()
+        self.worker = StatisticsWorker(self.parent.db)
+        self.worker.moveToThread(self.worker_thread)
+        self.worker_thread.started.connect(self.worker.run)
+        self.worker.finished.connect(self.on_calculate_finished)
+        self.worker.error.connect(self.on_calculate_error)
+        self.worker.finished.connect(self.worker_thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
+        self.worker_thread.start()
+
+    def on_calculate_finished(self, stats):
+        self.btn_calc.setEnabled(True)
         text = f"A fehlt: {stats[0]['missed_a']}\n"
         text += f"B fehlt: {stats[1]['missed_b']}\n"
         text += f"Beide fehlen: {stats[2]['both_missing']}"
         self.result.setPlainText(text)
+
+    def on_calculate_error(self, msg):
+        logging.error(f"Statistics error: {msg}")
+        self.btn_calc.setEnabled(True)
+        QMessageBox.critical(self, "Fehler bei Statistik", msg)
 
 class ExportWorker(QObject):
     finished = Signal(str)
@@ -344,6 +386,7 @@ class ExportWorker(QObject):
             c.save()
             self.finished.emit('PDF erstellt')
         except Exception as e:
+            logging.error(f"ExportWorker error: {e}")
             self.error.emit(str(e))
 
 class BackupWorker(QObject):
@@ -360,8 +403,10 @@ class BackupWorker(QObject):
             self.db.export_to_sql(self.fn)
             self.finished.emit(self.fn)
         except OSError as e:
+            logging.error(f"BackupWorker OSError: {e}")
             self.error.emit(f"Dateifehler: {e}")
         except Exception as e:
+            logging.error(f"BackupWorker error: {e}")
             self.error.emit(str(e))
 
 class RestoreWorker(QObject):
@@ -383,8 +428,10 @@ class RestoreWorker(QObject):
             self.parent.refresh_calendar()
             self.finished.emit()
         except OSError as e:
+            logging.error(f"RestoreWorker OSError: {e}")
             self.error.emit(f"Dateifehler: {e}")
         except Exception as e:
+            logging.error(f"RestoreWorker error: {e}")
             self.error.emit(str(e))
 
 class MainWindow(QMainWindow):
@@ -429,44 +476,42 @@ class MainWindow(QMainWindow):
         cal.setDateTextFormat(QDate(), QTextCharFormat())
         today = date.today()
 
-        # 1) Generiere für jedes Pattern alle Termine zwischen start_date.year ... end_date.year (oder bis heute.year)
+        def apply_format(d, color):
+            qd = QDate(d.year, d.month, d.day)
+            fmt = QTextCharFormat()
+            fmt.setBackground(QBrush(QColor(color)))
+            cal.setDateTextFormat(qd, fmt)
+
         raw: List[date] = []
         for p in self.patterns:
             start_y = p.start_date.year
-            last_y  = p.end_date.year if p.end_date else today.year
+            last_y = p.end_date.year if p.end_date else today.year
             for yr in range(start_y, last_y + 1):
                 raw.extend(generate_standard_days(p, yr))
 
-        # 2) Overrides anwenden
         planned = apply_overrides(raw, self.overrides)
-      
+
         for d in planned:
             if d <= today:
-                qd = QDate(d.year,d.month,d.day)
-                fmt = QTextCharFormat(); fmt.setBackground(QBrush(QColor(COLOR_PLANNED)))
-                cal.setDateTextFormat(qd, fmt)
-        for d,vs in self.visit_status.items():
+                apply_format(d, COLOR_PLANNED)
+        for d, vs in self.visit_status.items():
             if d <= today:
-                qd = QDate(d.year,d.month,d.day)
-                fmt = QTextCharFormat()
                 if not vs.present_child_a and not vs.present_child_b:
-                    fmt.setBackground(QBrush(QColor(COLOR_BOTH_ABSENT)))
+                    apply_format(d, COLOR_BOTH_ABSENT)
                 elif not vs.present_child_a:
-                    fmt.setBackground(QBrush(QColor(COLOR_A_ABSENT)))
+                    apply_format(d, COLOR_A_ABSENT)
                 elif not vs.present_child_b:
-                    fmt.setBackground(QBrush(QColor(COLOR_B_ABSENT)))
-                cal.setDateTextFormat(qd, fmt)
+                    apply_format(d, COLOR_B_ABSENT)
 
     def on_add_pattern(self):
         days = [i for i, cb in self.tab1.weekday_checks if cb.isChecked()]
         iv   = self.tab1.interval.value()
-        sd   = self.tab1.start_date.date().toPython()
-        # if “bis unendlich” is checked, end_date stays None
+        sd   = qdate_to_date(self.tab1.start_date.date())
         # if “bis unendlich” is checked, end_date stays None
         if self.tab1.chk_infinite.isChecked():
             ed = None
         else:
-            ed = self.tab1.end_date.date().toPython()
+            ed = qdate_to_date(self.tab1.end_date.date())
         pat = VisitPattern(days, iv, sd, ed)      # ← new line
 
         # 4) Speichere in der DB
@@ -482,7 +527,8 @@ class MainWindow(QMainWindow):
         self.refresh_calendar()
 
     def on_add_override(self):
-        f = self.tab1.ov_from.date().toPython(); t = self.tab1.ov_to.date().toPython()
+        f = qdate_to_date(self.tab1.ov_from.date())
+        t = qdate_to_date(self.tab1.ov_to.date())
         if self.tab1.ov_add.isChecked():
             pat = VisitPattern(list(range(7)),1,f)
             ov  = OverridePeriod(f,t,pat)
@@ -514,7 +560,7 @@ class MainWindow(QMainWindow):
             self.tab2.child_checks.append((i, cb))    
     def on_calendar_click(self):
         # Get the selected date and check if it's a planned visit day
-        selected_date = self.tab2.calendar.selectedDate().toPython()
+        selected_date = qdate_to_date(self.tab2.calendar.selectedDate())
         
         # Generate planned dates for the year of the selected date
         planned = apply_overrides(
@@ -556,7 +602,8 @@ class MainWindow(QMainWindow):
         self.visit_status.clear(); self.db.clear_status(); self.refresh_calendar()
 
     def on_export(self):
-        df = self.tab3.date_from.date().toPython(); dt = self.tab3.date_to.date().toPython()
+        df = qdate_to_date(self.tab3.date_from.date())
+        dt = qdate_to_date(self.tab3.date_to.date())
         self.export_thread = QThread()
         self.export_worker = ExportWorker(self, df, dt, self.patterns, self.overrides, self.visit_status)
         self.export_worker.moveToThread(self.export_thread)
@@ -572,6 +619,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, 'Export', msg)
 
     def on_export_error(self, msg):
+        logging.error(f"Export error: {msg}")
         QMessageBox.critical(self, 'Export-Fehler', msg)
 
     def cleanup(self):
