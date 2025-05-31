@@ -19,7 +19,7 @@ def create_pie_chart(values: list[int], labels: list[str], filename: str, colors
         ax.text(0.5, 0.5, "Keine Daten", ha="center", va="center", fontsize=14)
         ax.axis("off")
         if subtitle:
-            fig.text(0.5, 0.02, subtitle, ha="center", va="bottom", fontsize=14, fontweight='bold')
+            fig.text(0.5, 0.02, subtitle, ha="center", va="bottom", fontsize=22, fontweight='bold')
         fig.savefig(filename, bbox_inches="tight")
         plt.close(fig)
         if return_handles:
@@ -34,7 +34,7 @@ def create_pie_chart(values: list[int], labels: list[str], filename: str, colors
         wedges, texts, autotexts = ax.pie(values, labels=labels, autopct="%1.1f%%")
     ax.axis("equal")           # Kreis rund zeichnen
     if subtitle:
-        fig.text(0.5, 0.02, subtitle, ha="center", va="bottom", fontsize=14, fontweight='bold')
+        fig.text(0.5, 0.02, subtitle, ha="center", va="bottom", fontsize=22, fontweight='bold')
     fig.savefig(filename, bbox_inches="tight")
     if return_handles:
         plt.close(fig)
