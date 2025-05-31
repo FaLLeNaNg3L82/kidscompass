@@ -356,28 +356,45 @@ class MainWindow(QMainWindow):
         for i in range(index+1):
             cb = QCheckBox(f"Kind {i+1} nicht da")
             self.tab2.grid.addWidget(cb, i//2, i%2)
-            self.tab2.child_checks.append((i, cb))
-
+            self.tab2.child_checks.append((i, cb))    
     def on_calendar_click(self):
-        today   = date.today()
+        # Get the selected date and check if it's a planned visit day
+        selected_date = self.tab2.calendar.selectedDate().toPython()
+        
+        # Generate planned dates for the year of the selected date
         planned = apply_overrides(
-            sum((generate_standard_days(p, today.year) for p in self.patterns), []),
+            sum((generate_standard_days(p, selected_date.year) for p in self.patterns), []),
             self.overrides
         )
-        d       = self.tab2.calendar.selectedDate().toPython()
-        if d not in planned: return
-        vs      = self.visit_status.get(d, VisitStatus(day=d))
-        idxs    = [i for i,cb in self.tab2.child_checks if cb.isChecked()]
-        if not idxs: return
-        for i in idxs:
-            if i==0: vs.present_child_a = not vs.present_child_a
-            if i==1: vs.present_child_b = not vs.present_child_b
-        if vs.present_child_a and vs.present_child_b:
-            self.visit_status.pop(d, None)
-            self.db.delete_status(d)
+
+        # Return if the selected date is not a planned visit day
+        if selected_date not in planned:
+            return
+            
+        # Get currently checked children
+        checked_children = [i for i, cb in self.tab2.child_checks if cb.isChecked()]
+        if not checked_children:
+            return
+            
+        # Get existing visit status or create new one
+        vs = self.visit_status.get(selected_date, VisitStatus(day=selected_date))
+        
+        # Check if we're clicking with the same selection that caused the current status
+        current_status = (not vs.present_child_a, not vs.present_child_b)  # True means absent
+        new_status = (0 in checked_children, 1 in checked_children)
+        
+        if selected_date in self.visit_status and current_status == new_status:
+            # If clicking with same selection, reset to default (both present)
+            self.visit_status.pop(selected_date)
+            self.db.delete_status(selected_date)
         else:
-            self.visit_status[d] = vs
+            # Different selection or new entry - set according to checkboxes
+            vs.present_child_a = 0 not in checked_children  # Present if not checked
+            vs.present_child_b = 1 not in checked_children  # Present if not checked
+            self.visit_status[selected_date] = vs
             self.db.save_status(vs)
+
+        # Refresh calendar to show updated colors
         self.refresh_calendar()
 
     def on_reset_status(self):
