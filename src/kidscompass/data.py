@@ -1,10 +1,18 @@
+import os
 import sqlite3
 from datetime import date
 from kidscompass.models import VisitPattern, OverridePeriod, RemoveOverride, VisitStatus
 
 class Database:
     def __init__(self, db_path: str = None):
-        self.db_path = db_path or "kidscompass.db"
+        if db_path:
+            self.db_path = db_path
+        else:
+            # Standardpfad im Benutzerverzeichnis
+            self.db_path = os.path.join(os.path.expanduser("~"), ".kidscompass", "kidscompass.db")
+            # Stelle sicher, dass das Verzeichnis existiert
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
         self._ensure_tables()
@@ -79,25 +87,33 @@ class Database:
             pat = VisitPattern(wd, row['interval_weeks'], start, end)
             pat.id = row['id']
             out.append(pat)
-        return out
-
+        return out    
     def save_pattern(self, pat: VisitPattern):
-        wd_text = ','.join(str(d) for d in pat.weekdays)
-        sd = pat.start_date.isoformat()
-        ed = pat.end_date.isoformat() if pat.end_date else None
-        cur = self.conn.cursor()
-        if hasattr(pat, 'id'):
-            cur.execute(
-                "UPDATE patterns SET weekdays=?, interval_weeks=?, start_date=?, end_date=? WHERE id=?",
-                (wd_text, pat.interval_weeks, sd, ed, pat.id)
-            )
-        else:
-            cur.execute(
-                "INSERT INTO patterns (weekdays, interval_weeks, start_date, end_date) VALUES (?,?,?,?)",
-                (wd_text, pat.interval_weeks, sd, ed)
-            )
-            pat.id = cur.lastrowid
-        self.conn.commit()
+        try:
+            wd_text = ','.join(str(d) for d in pat.weekdays)
+            sd = pat.start_date.isoformat()
+            ed = pat.end_date.isoformat() if pat.end_date else None
+            cur = self.conn.cursor()
+            if getattr(pat, 'id', None) is not None:
+                cur.execute(
+                    "UPDATE patterns SET weekdays=?, interval_weeks=?, start_date=?, end_date=? WHERE id=?",
+                    (wd_text, pat.interval_weeks, sd, ed, pat.id)
+                )
+                print(f"Updated pattern id={pat.id}")
+            else:
+                cur.execute(
+                    "INSERT INTO patterns (weekdays, interval_weeks, start_date, end_date) VALUES (?,?,?,?)",
+                    (wd_text, pat.interval_weeks, sd, ed)
+                )
+                pat.id = cur.lastrowid
+                print(f"Inserted new pattern with id={pat.id}")
+            self.conn.commit()
+            # Verify the save
+            cur.execute("SELECT * FROM patterns WHERE id=?", (pat.id,))
+            row = cur.fetchone()
+            print(f"Saved pattern: {dict(row)}")
+        except Exception as e:
+            print(f"Error saving pattern: {e}")
 
     def delete_pattern(self, pattern_id: int):
         cur = self.conn.cursor()
@@ -192,3 +208,9 @@ class Database:
         cur = self.conn.cursor()
         cur.execute("DELETE FROM visit_status")
         self.conn.commit()
+        
+    def close(self):
+        """Schließe die Datenbankverbindung sauber"""
+        if self.conn:
+            self.conn.close()
+            self.conn = None
