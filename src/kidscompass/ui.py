@@ -529,7 +529,6 @@ class MainWindow(QMainWindow):
             self._mutex.unlock()
 
     def on_add_pattern(self):
-        self._mutex.lock()
         try:
             days = [i for i, cb in self.tab1.weekday_checks if cb.isChecked()]
             iv   = self.tab1.interval.value()
@@ -545,12 +544,12 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(str(pat))
             item.setData(Qt.UserRole, pat)
             self.tab1.entry_list.addItem(item)
-        finally:
-            self._mutex.unlock()
+        except Exception as e:
+            logging.error(f"Fehler beim Hinzufügen des Musters: {e}")
+            QMessageBox.critical(self, "Fehler", f"Fehler beim Hinzufügen des Musters: {e}")
         self.refresh_calendar()
 
     def on_add_override(self):
-        self._mutex.lock()
         try:
             f = qdate_to_date(self.tab1.ov_from.date())
             t = qdate_to_date(self.tab1.ov_to.date())
@@ -563,8 +562,9 @@ class MainWindow(QMainWindow):
             self.overrides.append(ov)
             item = QListWidgetItem(str(ov)); item.setData(Qt.UserRole, ov)
             self.tab1.entry_list.addItem(item)
-        finally:
-            self._mutex.unlock()
+        except Exception as e:
+            logging.error(f"Fehler beim Hinzufügen des Overrides: {e}")
+            QMessageBox.critical(self, "Fehler", f"Fehler beim Hinzufügen des Overrides: {e}")
         self.refresh_calendar()
 
     def on_delete_entry(self):
