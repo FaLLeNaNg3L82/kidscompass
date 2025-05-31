@@ -2,7 +2,7 @@
 
 import matplotlib.pyplot as plt
 from PySide6.QtCore import QObject
-
+from kidscompass.data import Database  # Korrigierter Import
 class BackupWorker(QObject):
     def __init__(self, db_path, fn):
         super().__init__()
