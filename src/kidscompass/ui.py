@@ -1,9 +1,12 @@
 import sys
 from datetime import date, timedelta
 from typing import List, Union
+import os
 
-from .models import VisitPattern, OverridePeriod, RemoveOverride
+import matplotlib
+matplotlib.use("Agg")
 
+from .models import VisitPattern, OverridePeriod, RemoveOverride, VisitStatus
 import matplotlib.pyplot as plt
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -13,23 +16,32 @@ from PySide6.QtWidgets import (
     QSpinBox, QListWidget, QListWidgetItem, QMessageBox, QDateEdit,
     QComboBox, QGroupBox, QRadioButton, QGridLayout, QTextEdit, QFileDialog
 )
-
 from PySide6.QtGui import QTextCharFormat, QBrush, QColor
-from PySide6.QtCore import Qt, QDate
-
-from kidscompass.models import VisitPattern, OverridePeriod, RemoveOverride, VisitStatus
-from kidscompass.calendar_logic import generate_standard_days, apply_overrides
-from kidscompass.data import Database
-from kidscompass.statistics import count_missing_by_weekday
-
-from PySide6.QtGui import QTextCharFormat, QBrush, QColor
-from PySide6.QtCore import Qt, QDate
-
-from kidscompass.models import VisitPattern, OverridePeriod, RemoveOverride, VisitStatus
+from PySide6.QtCore import Qt, QDate, QThread, Signal, QObject
 from kidscompass.calendar_logic import generate_standard_days, apply_overrides
 from kidscompass.data import Database
 from kidscompass.statistics import count_missing_by_weekday, summarize_visits
 
+
+
+# === Constants ===
+SQL_FILE_FILTER = "SQL-Datei (*.sql)"
+BACKUP_TITLE = "Backup speichern als"
+RESTORE_TITLE = "Backup wiederherstellen"
+RESTORE_CONFIRM_TITLE = "Restore bestätigen"
+RESTORE_CONFIRM_TEXT = "Achtung: Alle aktuellen Einträge werden überschrieben.\nWeiter?"
+BACKUP_SUCCESS_TITLE = "Backup"
+BACKUP_SUCCESS_TEXT = "Datenbank erfolgreich exportiert nach:\n{fn}"
+BACKUP_ERROR_TITLE = "Backup-Fehler"
+RESTORE_SUCCESS_TITLE = "Restore"
+RESTORE_SUCCESS_TEXT = "Datenbank erfolgreich wiederhergestellt."
+RESTORE_ERROR_TITLE = "Restore-Fehler"
+
+# Farbkonstanten
+COLOR_PLANNED = '#A0C4FF'
+COLOR_BOTH_ABSENT = '#FFADAD'
+COLOR_A_ABSENT = '#FFD97D'
+COLOR_B_ABSENT = '#A0FFA0'
 
 
 # Hilfsfunktion für Tortendiagramme
@@ -51,6 +63,10 @@ def create_pie_chart(values: list, labels: list, filename: str):
     fig.savefig(filename, bbox_inches="tight")
     plt.close(fig)
 
+
+def qdate_to_date(qdate):
+    """Hilfsfunktion: QDate -> datetime.date"""
+    return qdate.toPython() if hasattr(qdate, 'toPython') else date(qdate.year(), qdate.month(), qdate.day())
 
 class SettingsTab(QWidget):
     def __init__(self, parent):
@@ -142,7 +158,8 @@ class StatusTab(QWidget):
 
 class ExportTab(QWidget):
     def __init__(self, parent):
-        super().__init__(); self.parent = parent
+        super().__init__()
+        self.parent = parent
         layout = QVBoxLayout(self)
 
         hl = QHBoxLayout()
@@ -170,38 +187,56 @@ class ExportTab(QWidget):
         btn_restore.clicked.connect(self.on_restore)        
 
     def on_backup(self):
-        fn, _ = QFileDialog.getSaveFileName(self, "Backup speichern als", filter="SQL-Datei (*.sql)")
+        fn, _ = QFileDialog.getSaveFileName(self, BACKUP_TITLE, filter=SQL_FILE_FILTER)
         if not fn:
             return
-        try:
-            self.parent.db.export_to_sql(fn)
-            QMessageBox.information(self, "Backup", f"Datenbank erfolgreich exportiert nach:\n{fn}")
-        except Exception as e:
-            QMessageBox.critical(self, "Backup-Fehler", str(e))
+        self.backup_thread = QThread()
+        self.backup_worker = BackupWorker(self.parent.db, fn)
+        self.backup_worker.moveToThread(self.backup_thread)
+        self.backup_thread.started.connect(self.backup_worker.run)
+        self.backup_worker.finished.connect(self.on_backup_finished)
+        self.backup_worker.error.connect(self.on_backup_error)
+        self.backup_worker.finished.connect(self.backup_thread.quit)
+        self.backup_worker.finished.connect(self.backup_worker.deleteLater)
+        self.backup_thread.finished.connect(self.backup_thread.deleteLater)
+        self.backup_thread.start()
+
+    def on_backup_finished(self, fn):
+        QMessageBox.information(self, BACKUP_SUCCESS_TITLE, BACKUP_SUCCESS_TEXT.format(fn=fn))
+
+    def on_backup_error(self, msg):
+        QMessageBox.critical(self, BACKUP_ERROR_TITLE, msg)
 
     def on_restore(self):
-        fn, _ = QFileDialog.getOpenFileName(self, "Backup wiederherstellen", filter="SQL-Datei (*.sql)")
+        fn, _ = QFileDialog.getOpenFileName(self, RESTORE_TITLE, filter=SQL_FILE_FILTER)
         if not fn:
             return
         confirm = QMessageBox.question(
-            self, "Restore bestätigen",
-            "Achtung: Alle aktuellen Einträge werden überschrieben.\nWeiter?")
+            self, RESTORE_CONFIRM_TITLE,
+            RESTORE_CONFIRM_TEXT)
         if confirm != QMessageBox.Yes:
             return
-        try:
-            self.parent.db.import_from_sql(fn)
-            # Nach dem Restore alle In-Memory-Caches neu laden:
-            self.parent.visit_status = self.parent.db.load_all_status()
-            self.parent.patterns     = self.parent.db.load_patterns()
-            self.parent.overrides    = self.parent.db.load_overrides()
-            self.parent.refresh_calendar()
-            QMessageBox.information(self, "Restore", "Datenbank erfolgreich wiederhergestellt.")
-        except Exception as e:
-            QMessageBox.critical(self, "Restore-Fehler", str(e))
+        self.restore_thread = QThread()
+        self.restore_worker = RestoreWorker(self.parent.db, fn, self.parent)
+        self.restore_worker.moveToThread(self.restore_thread)
+        self.restore_thread.started.connect(self.restore_worker.run)
+        self.restore_worker.finished.connect(self.on_restore_finished)
+        self.restore_worker.error.connect(self.on_restore_error)
+        self.restore_worker.finished.connect(self.restore_thread.quit)
+        self.restore_worker.finished.connect(self.restore_worker.deleteLater)
+        self.restore_thread.finished.connect(self.restore_thread.deleteLater)
+        self.restore_thread.start()
+
+    def on_restore_finished(self):
+        QMessageBox.information(self, RESTORE_SUCCESS_TITLE, RESTORE_SUCCESS_TEXT)
+
+    def on_restore_error(self, msg):
+        QMessageBox.critical(self, RESTORE_ERROR_TITLE, msg)
 
 class StatisticsTab(QWidget):
     def __init__(self, parent):
-        super().__init__(); self.parent = parent
+        super().__init__()
+        self.parent = parent
         layout = QVBoxLayout(self)
 
         period = QHBoxLayout(); period.addWidget(QLabel("Von:"))
@@ -236,12 +271,128 @@ class StatisticsTab(QWidget):
         text += f"Beide fehlen: {stats[2]['both_missing']}"
         self.result.setPlainText(text)
 
+class ExportWorker(QObject):
+    finished = Signal(str)
+    error = Signal(str)
+
+    def __init__(self, parent, df, dt, patterns, overrides, visit_status):
+        super().__init__()
+        self.parent = parent
+        self.df = df
+        self.dt = dt
+        self.patterns = patterns
+        self.overrides = overrides
+        self.visit_status = visit_status
+
+    def run(self):
+        try:
+            today = date.today()
+            all_planned = apply_overrides(
+                sum((generate_standard_days(p, today.year) for p in self.patterns), []),
+                self.overrides
+            )
+            planned = [d for d in all_planned if self.df <= d <= self.dt]
+            deviations = []
+            for d in planned:
+                vs = self.visit_status.get(d, VisitStatus(day=d))
+                if not (vs.present_child_a and vs.present_child_b):
+                    status = (
+                        "Beide fehlen" if not vs.present_child_a and not vs.present_child_b else
+                        "Kind A fehlt" if not vs.present_child_a else
+                        "Kind B fehlt"
+                    )
+                    deviations.append((d, status))
+            stats = summarize_visits(planned, self.visit_status)
+            png_a, png_b, png_both = 'kind_a.png','kind_b.png','both.png'
+            # Prüfe, ob die Bilddateien existieren
+            for f in (png_a, png_b, png_both):
+                if not os.path.exists(f):
+                    self.error.emit(f"Fehler: Bilddatei '{f}' nicht gefunden. Bitte zuerst Statistik berechnen.")
+                    return
+            create_pie_chart([stats['total']-stats['missed_a'],stats['missed_a']],['Anwesend','Fehlend'],png_a)
+            create_pie_chart([stats['total']-stats['missed_b'],stats['missed_b']],['Anwesend','Fehlend'],png_b)
+            create_pie_chart([stats['both_present'],stats['total']-stats['both_present']],['Beide da','Mindestens ein Kind fehlt'],png_both)
+            c = canvas.Canvas('kidscompass_report.pdf',pagesize=letter)
+            w,h = letter; y = h-50
+            c.setFont('Helvetica-Bold',14); c.drawString(50,y,'KidsCompass Report'); y-=30
+            c.setFont('Helvetica',10)
+            c.drawString(50, y,    f"Zeitraum: {self.df.isoformat()} bis {self.dt.isoformat()}"); y -= 20
+            c.drawString(50, y,    f"Geplante Umgänge: {stats['total']}");             y -= 20
+            c.drawString(50, y,    f"Abweichungstage: {len(deviations)}");              y -= 20
+            total = stats['total']
+            dev = len(deviations)
+            pct_dev   = round(dev   / total * 100, 1) if total else 0.0
+            miss_a    = stats['missed_a']
+            pct_a     = round(miss_a / total * 100, 1) if total else 0.0
+            miss_b    = stats['missed_b']
+            pct_b     = round(miss_b / total * 100, 1) if total else 0.0
+            c.drawString(50, y, f"Abweichungstage: {dev} ({pct_dev}%)"); y -= 20
+            c.drawString(50, y, f"Kind A Abweichungstage: {miss_a} ({pct_a}%)"); y -= 15
+            c.drawString(50, y, f"Kind B Abweichungstage: {miss_b} ({pct_b}%)"); y -= 20
+            weekdays = ["Mo","Di","Mi","Do","Fr","Sa","So"]
+            for d, st in deviations:
+                if y < 100:
+                    c.showPage()
+                    y = h - 50
+                wd = weekdays[d.weekday()]
+                c.drawString(60, y, f"{d.isoformat()} ({wd}): {st}")
+                y -= 15
+            c.showPage(); size=200
+            c.drawImage(png_a,50,y-size,width=size,height=size)
+            c.drawImage(png_b,260,y-size,width=size,height=size)
+            c.drawImage(png_both,470,y-size,width=size,height=size)
+            c.save()
+            self.finished.emit('PDF erstellt')
+        except Exception as e:
+            self.error.emit(str(e))
+
+class BackupWorker(QObject):
+    finished = Signal(str)
+    error = Signal(str)
+
+    def __init__(self, db, fn):
+        super().__init__()
+        self.db = db
+        self.fn = fn
+
+    def run(self):
+        try:
+            self.db.export_to_sql(self.fn)
+            self.finished.emit(self.fn)
+        except OSError as e:
+            self.error.emit(f"Dateifehler: {e}")
+        except Exception as e:
+            self.error.emit(str(e))
+
+class RestoreWorker(QObject):
+    finished = Signal()
+    error = Signal(str)
+
+    def __init__(self, db, fn, parent):
+        super().__init__()
+        self.db = db
+        self.fn = fn
+        self.parent = parent
+
+    def run(self):
+        try:
+            self.db.import_from_sql(self.fn)
+            self.parent.visit_status = self.db.load_all_status()
+            self.parent.patterns     = self.db.load_patterns()
+            self.parent.overrides    = self.db.load_overrides()
+            self.parent.refresh_calendar()
+            self.finished.emit()
+        except OSError as e:
+            self.error.emit(f"Dateifehler: {e}")
+        except Exception as e:
+            self.error.emit(str(e))
+
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, db=None):
         super().__init__()
         self.setWindowTitle("KidsCompass")
         self.resize(900,600)
-        self.db = Database()
+        self.db = db if db is not None else Database()
         self.patterns = []
         self.overrides = []
         self.visit_status = self.db.load_all_status()
@@ -292,18 +443,18 @@ class MainWindow(QMainWindow):
         for d in planned:
             if d <= today:
                 qd = QDate(d.year,d.month,d.day)
-                fmt = QTextCharFormat(); fmt.setBackground(QBrush(QColor('#A0C4FF')))
+                fmt = QTextCharFormat(); fmt.setBackground(QBrush(QColor(COLOR_PLANNED)))
                 cal.setDateTextFormat(qd, fmt)
         for d,vs in self.visit_status.items():
             if d <= today:
                 qd = QDate(d.year,d.month,d.day)
                 fmt = QTextCharFormat()
                 if not vs.present_child_a and not vs.present_child_b:
-                    fmt.setBackground(QBrush(QColor('#FFADAD')))
+                    fmt.setBackground(QBrush(QColor(COLOR_BOTH_ABSENT)))
                 elif not vs.present_child_a:
-                    fmt.setBackground(QBrush(QColor('#FFD97D')))
+                    fmt.setBackground(QBrush(QColor(COLOR_A_ABSENT)))
                 elif not vs.present_child_b:
-                    fmt.setBackground(QBrush(QColor('#A0FFA0')))
+                    fmt.setBackground(QBrush(QColor(COLOR_B_ABSENT)))
                 cal.setDateTextFormat(qd, fmt)
 
     def on_add_pattern(self):
@@ -406,68 +557,26 @@ class MainWindow(QMainWindow):
 
     def on_export(self):
         df = self.tab3.date_from.date().toPython(); dt = self.tab3.date_to.date().toPython()
-        today = date.today()
-        all_planned = apply_overrides(
-            sum((generate_standard_days(p,today.year) for p in self.patterns),[]),
-            self.overrides
-        )
-        planned = [d for d in all_planned if df<=d<=dt]
-        deviations = []
-        for d in planned:
-            vs = self.visit_status.get(d, VisitStatus(day=d))
-            if not (vs.present_child_a and vs.present_child_b):
-                status = (
-                    "Beide fehlen" if not vs.present_child_a and not vs.present_child_b else
-                    "Kind A fehlt" if not vs.present_child_a else
-                    "Kind B fehlt"
-                )
-                deviations.append((d, status))
-        stats = summarize_visits(planned, self.visit_status)
-        png_a, png_b, png_both = 'kind_a.png','kind_b.png','both.png'
-        create_pie_chart([stats['total']-stats['missed_a'],stats['missed_a']],['Anwesend','Fehlend'],png_a)
-        create_pie_chart([stats['total']-stats['missed_b'],stats['missed_b']],['Anwesend','Fehlend'],png_b)
-        create_pie_chart([stats['both_present'],stats['total']-stats['both_present']],['Beide da','Mindestens ein Kind fehlt'],png_both)
-        c = canvas.Canvas('kidscompass_report.pdf',pagesize=letter)
-        w,h = letter; y = h-50
-        c.setFont('Helvetica-Bold',14); c.drawString(50,y,'KidsCompass Report'); y-=30
-        c.setFont('Helvetica',10)
-        c.drawString(50, y,    f"Zeitraum: {df.isoformat()} bis {dt.isoformat()}"); y -= 20
-        c.drawString(50, y,    f"Geplante Umgänge: {stats['total']}");             y -= 20
-        c.drawString(50, y,    f"Abweichungstage: {len(deviations)}");              y -= 20
-        # Prozentzahlen berechnen
-        total = stats['total']
-        dev = len(deviations)
-        pct_dev   = round(dev   / total * 100, 1) if total else 0.0
-        miss_a    = stats['missed_a']
-        pct_a     = round(miss_a / total * 100, 1) if total else 0.0
-        miss_b    = stats['missed_b']
-        pct_b     = round(miss_b / total * 100, 1) if total else 0.0
+        self.export_thread = QThread()
+        self.export_worker = ExportWorker(self, df, dt, self.patterns, self.overrides, self.visit_status)
+        self.export_worker.moveToThread(self.export_thread)
+        self.export_thread.started.connect(self.export_worker.run)
+        self.export_worker.finished.connect(self.on_export_finished)
+        self.export_worker.error.connect(self.on_export_error)
+        self.export_worker.finished.connect(self.export_thread.quit)
+        self.export_worker.finished.connect(self.export_worker.deleteLater)
+        self.export_thread.finished.connect(self.export_thread.deleteLater)
+        self.export_thread.start()
 
-        # Ausgabe
-        c.drawString(50, y, f"Abweichungstage: {dev} ({pct_dev}%)"); y -= 20
-        c.drawString(50, y, f"Kind A Abweichungstage: {miss_a} ({pct_a}%)"); y -= 15
-        c.drawString(50, y, f"Kind B Abweichungstage: {miss_b} ({pct_b}%)"); y -= 20
+    def on_export_finished(self, msg):
+        QMessageBox.information(self, 'Export', msg)
 
-
-        # Liste der Abweichungen mit Wochentag
-        weekdays = ["Mo","Di","Mi","Do","Fr","Sa","So"]
-        for d, st in deviations:
-            if y < 100:
-                c.showPage()
-                y = h - 50
-            wd = weekdays[d.weekday()]
-            c.drawString(60, y, f"{d.isoformat()} ({wd}): {st}")
-            y -= 15
-
-        c.showPage(); size=200
-        c.drawImage(png_a,50,y-size,width=size,height=size)
-        c.drawImage(png_b,260,y-size,width=size,height=size)
-        c.drawImage(png_both,470,y-size,width=size,height=size)
-        c.save(); QMessageBox.information(self,'Export','PDF erstellt')
+    def on_export_error(self, msg):
+        QMessageBox.critical(self, 'Export-Fehler', msg)
 
     def cleanup(self):
-        """Wird beim Beenden der Anwendung aufgerufen"""
-        if hasattr(self, 'db'):
+        # Schließe die Datenbankverbindung, falls vorhanden
+        if hasattr(self, 'db') and self.db:
             self.db.close()
 
 def main():
