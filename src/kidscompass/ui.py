@@ -336,7 +336,12 @@ class ExportWorker(QObject):
         self.visit_status = visit_status
 
     def run(self):
+        logging.info("[KidsCompass] ExportWorker.run gestartet.")
         try:
+            if self.df is None or self.dt is None:
+                self.error.emit("Fehler: Start- und Enddatum müssen gesetzt sein.")
+                logging.error("[KidsCompass] Fehler: Start- und Enddatum fehlen im ExportWorker.")
+                return
             years = range(self.df.year, self.dt.year + 1)
             all_planned = apply_overrides(
                 sum((generate_standard_days(p, year) for p in self.patterns for year in years), []),
@@ -363,29 +368,44 @@ class ExportWorker(QObject):
             try:
                 create_pie_chart([stats['total']-stats['missed_a'],stats['missed_a']],['Anwesend','Fehlend'],png_a)
                 create_pie_chart([stats['total']-stats['missed_b'],stats['missed_b']],['Anwesend','Fehlend'],png_b)
-                create_pie_chart([stats['both_present'],stats['total']-stats['both_present']],['Beide da','Mindestens ein Kind fehlt'],png_both)
+                # Neues 3-Felder-Diagramm mit roter Farbe für 'Beide fehlen'
+                create_pie_chart(
+                    [stats['both_present'], stats['total'] - stats['both_present'] - stats['both_missing'], stats['both_missing']],
+                    ['Beide da', 'Mindestens ein Kind fehlt', 'Beide fehlen'],
+                    png_both,
+                    colors=['#A0FFA0', '#FFD97D', '#FF0000']
+                )
             except Exception as e:
                 logging.error(f"Fehler bei create_pie_chart: {e}")
                 self.error.emit(f"Fehler bei Diagrammerstellung: {e}")
                 return
             c = canvas.Canvas('kidscompass_report.pdf',pagesize=letter)
-            w,h = letter; y = h-50
-            c.setFont('Helvetica-Bold',14); c.drawString(50,y,'KidsCompass Report'); y-=30
+            w,h = letter
+            y = h - 50
+            c.setFont('Helvetica-Bold',14)
+            c.drawString(50, y, 'KidsCompass Report')
+            y -= 30
             c.setFont('Helvetica',10)
-            c.drawString(50, y,    f"Zeitraum: {self.df.isoformat()} bis {self.dt.isoformat()}"); y -= 20
-            c.drawString(50, y,    f"Geplante Umgänge: {stats['total']}");             y -= 20
-            c.drawString(50, y,    f"Abweichungstage: {len(deviations)}");              y -= 20
+            c.drawString(50, y, f"Zeitraum: {self.df.isoformat()} bis {self.dt.isoformat()}")
+            y -= 20
+            c.drawString(50, y, f"Geplante Umgänge: {stats['total']}")
+            y -= 20
+            c.drawString(50, y, f"Abweichungstage: {len(deviations)}")
+            y -= 20
             total = stats['total']
             dev = len(deviations)
-            pct_dev   = round(dev   / total * 100, 1) if total else 0.0
-            miss_a    = stats['missed_a']
-            pct_a     = round(miss_a / total * 100, 1) if total else 0.0
-            miss_b    = stats['missed_b']
-            pct_b     = round(miss_b / total * 100, 1) if total else 0.0
-            c.drawString(50, y, f"Abweichungstage: {dev} ({pct_dev}%)"); y -= 20
-            c.drawString(50, y, f"Kind A Abweichungstage: {miss_a} ({pct_a}%)"); y -= 15
-            c.drawString(50, y, f"Kind B Abweichungstage: {miss_b} ({pct_b}%)"); y -= 20
-            weekdays = ["Mo","Di","Mi","Do","Fr","Sa","So"]
+            pct_dev = round(dev / total * 100, 1) if total else 0.0
+            miss_a = stats['missed_a']
+            pct_a = round(miss_a / total * 100, 1) if total else 0.0
+            miss_b = stats['missed_b']
+            pct_b = round(miss_b / total * 100, 1) if total else 0.0
+            c.drawString(50, y, f"Abweichungstage: {dev} ({pct_dev}%)")
+            y -= 20
+            c.drawString(50, y, f"Kind A Abweichungstage: {miss_a} ({pct_a}%)")
+            y -= 15
+            c.drawString(50, y, f"Kind B Abweichungstage: {miss_b} ({pct_b}%)")
+            y -= 20
+            weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
             for d, st in deviations:
                 if y < 100:
                     c.showPage()
@@ -393,10 +413,28 @@ class ExportWorker(QObject):
                 wd = weekdays[d.weekday()]
                 c.drawString(60, y, f"{d.isoformat()} ({wd}): {st}")
                 y -= 15
-            c.showPage(); size=200
-            c.drawImage(png_a,50,y-size,width=size,height=size)
-            c.drawImage(png_b,260,y-size,width=size,height=size)
-            c.drawImage(png_both,470,y-size,width=size,height=size)
+            # Weniger Abstand nach Liste
+            y -= 10
+            c.showPage()
+            size = 150
+            # Zentrierte Positionen
+            x_center = w / 2
+            spacing = 20
+            total_width = size * 2 + spacing
+            x_left = x_center - total_width / 2
+            x_right = x_center + spacing / 2
+            y_top = y
+            y_bottom = y - size - 20
+            # Beschriftungen
+            c.setFont('Helvetica-Bold', 12)
+            c.drawCentredString(x_left + size / 2, y_top + 15, 'Kind A')
+            c.drawCentredString(x_right + size / 2, y_top + 15, 'Kind B')
+            c.drawCentredString(x_center, y_bottom + 15, 'Beide')
+            # Zeichne zwei Diagramme oben
+            c.drawImage(png_a, x_left, y_top - size, width=size, height=size)
+            c.drawImage(png_b, x_right, y_top - size, width=size, height=size)
+            # Zeichne drittes Diagramm zentriert darunter
+            c.drawImage(png_both, x_center - size / 2, y_bottom - size, width=size, height=size)
             c.save()
             self.finished.emit('PDF erstellt')
         except Exception as e:
@@ -639,7 +677,9 @@ class MainWindow(QMainWindow):
         self.refresh_calendar()
 
     def on_export(self):
+        logging.info("[KidsCompass] Export-Button wurde geklickt.")
         if self.export_thread and self.export_thread.isRunning():
+            logging.info("[KidsCompass] Export-Thread läuft bereits.")
             return
 
         df = qdate_to_date(self.tab3.date_from.date())
