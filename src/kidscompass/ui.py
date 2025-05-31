@@ -193,6 +193,9 @@ class ExportTab(QWidget):
         self.btn_export.clicked.connect(self.parent.on_export)
 
     def on_backup(self):
+        if hasattr(self.parent, 'backup_thread') and self.parent.backup_thread and self.parent.backup_thread.isRunning():
+            return
+
         fn, _ = QFileDialog.getSaveFileName(self, BACKUP_TITLE, filter=SQL_FILE_FILTER)
         if not fn:
             return
@@ -215,6 +218,9 @@ class ExportTab(QWidget):
         QMessageBox.critical(self, BACKUP_ERROR_TITLE, msg)
 
     def on_restore(self):
+        if hasattr(self.parent, 'restore_thread') and self.parent.restore_thread and self.parent.restore_thread.isRunning():
+            return
+
         fn, _ = QFileDialog.getOpenFileName(self, RESTORE_TITLE, filter=SQL_FILE_FILTER)
         if not fn:
             return
@@ -288,6 +294,9 @@ class StatisticsTab(QWidget):
         self.btn_calc.clicked.connect(self.on_calculate)
 
     def on_calculate(self):
+        if hasattr(self.parent, 'worker_thread') and self.parent.worker_thread and self.parent.worker_thread.isRunning():
+            return
+
         self.btn_calc.setEnabled(False)
         self.result.clear()
         self.worker_thread = QThread()
@@ -459,6 +468,11 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.tab3, "Export")
         tabs.addTab(self.tab4, "Statistiken")
 
+        self.export_thread = None
+        self.backup_thread = None
+        self.restore_thread = None
+        self.worker_thread = None
+
         self.load_config()
         self.refresh_calendar()
         self.on_child_count_changed(0)
@@ -620,6 +634,9 @@ class MainWindow(QMainWindow):
         self.refresh_calendar()
 
     def on_export(self):
+        if self.export_thread and self.export_thread.isRunning():
+            return
+
         df = qdate_to_date(self.tab3.date_from.date())
         dt = qdate_to_date(self.tab3.date_to.date())
         self.export_thread = QThread()
