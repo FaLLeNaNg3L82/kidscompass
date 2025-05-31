@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QComboBox, QGroupBox, QRadioButton, QGridLayout, QTextEdit, QFileDialog
 )
 from PySide6.QtGui import QTextCharFormat, QBrush, QColor
-from PySide6.QtCore import Qt, QDate, QThread, Signal, QObject
+from PySide6.QtCore import Qt, QDate, QThread, Signal, QObject, QMutex
 from kidscompass.calendar_logic import generate_standard_days, apply_overrides
 from kidscompass.data import Database
 from kidscompass.statistics import count_missing_by_weekday, summarize_visits
@@ -444,6 +444,9 @@ class MainWindow(QMainWindow):
         self.overrides = []
         self.visit_status = self.db.load_all_status()
 
+        # Mutex für thread-safe Zugriff
+        self._mutex = QMutex()
+
         # Stelle sicher, dass die DB-Verbindung geschlossen wird
         app = QApplication.instance()
         app.aboutToQuit.connect(self.cleanup)
@@ -461,15 +464,19 @@ class MainWindow(QMainWindow):
         self.on_child_count_changed(0)
 
     def load_config(self):
-        self.patterns = self.db.load_patterns()
-        self.tab1.entry_list.clear()
-        for pat in self.patterns:
-            item = QListWidgetItem(str(pat)); item.setData(Qt.UserRole, pat)
-            self.tab1.entry_list.addItem(item)
-        self.overrides = self.db.load_overrides()
-        for ov in self.overrides:
-            item = QListWidgetItem(str(ov)); item.setData(Qt.UserRole, ov)
-            self.tab1.entry_list.addItem(item)
+        self._mutex.lock()
+        try:
+            self.patterns = self.db.load_patterns()
+            self.tab1.entry_list.clear()
+            for pat in self.patterns:
+                item = QListWidgetItem(str(pat)); item.setData(Qt.UserRole, pat)
+                self.tab1.entry_list.addItem(item)
+            self.overrides = self.db.load_overrides()
+            for ov in self.overrides:
+                item = QListWidgetItem(str(ov)); item.setData(Qt.UserRole, ov)
+                self.tab1.entry_list.addItem(item)
+        finally:
+            self._mutex.unlock()
 
     def refresh_calendar(self):
         cal = self.tab2.calendar
@@ -482,73 +489,83 @@ class MainWindow(QMainWindow):
             fmt.setBackground(QBrush(QColor(color)))
             cal.setDateTextFormat(qd, fmt)
 
-        raw: List[date] = []
-        for p in self.patterns:
-            start_y = p.start_date.year
-            last_y = p.end_date.year if p.end_date else today.year
-            for yr in range(start_y, last_y + 1):
-                raw.extend(generate_standard_days(p, yr))
+        self._mutex.lock()
+        try:
+            raw: List[date] = []
+            for p in self.patterns:
+                start_y = p.start_date.year
+                last_y = p.end_date.year if p.end_date else today.year
+                for yr in range(start_y, last_y + 1):
+                    raw.extend(generate_standard_days(p, yr))
 
-        planned = apply_overrides(raw, self.overrides)
+            planned = apply_overrides(raw, self.overrides)
 
-        for d in planned:
-            if d <= today:
-                apply_format(d, COLOR_PLANNED)
-        for d, vs in self.visit_status.items():
-            if d <= today:
-                if not vs.present_child_a and not vs.present_child_b:
-                    apply_format(d, COLOR_BOTH_ABSENT)
-                elif not vs.present_child_a:
-                    apply_format(d, COLOR_A_ABSENT)
-                elif not vs.present_child_b:
-                    apply_format(d, COLOR_B_ABSENT)
+            for d in planned:
+                if d <= today:
+                    apply_format(d, COLOR_PLANNED)
+            for d, vs in self.visit_status.items():
+                if d <= today:
+                    if not vs.present_child_a and not vs.present_child_b:
+                        apply_format(d, COLOR_BOTH_ABSENT)
+                    elif not vs.present_child_a:
+                        apply_format(d, COLOR_A_ABSENT)
+                    elif not vs.present_child_b:
+                        apply_format(d, COLOR_B_ABSENT)
+        finally:
+            self._mutex.unlock()
 
     def on_add_pattern(self):
-        days = [i for i, cb in self.tab1.weekday_checks if cb.isChecked()]
-        iv   = self.tab1.interval.value()
-        sd   = qdate_to_date(self.tab1.start_date.date())
-        # if “bis unendlich” is checked, end_date stays None
-        if self.tab1.chk_infinite.isChecked():
-            ed = None
-        else:
-            ed = qdate_to_date(self.tab1.end_date.date())
-        pat = VisitPattern(days, iv, sd, ed)      # ← new line
+        self._mutex.lock()
+        try:
+            days = [i for i, cb in self.tab1.weekday_checks if cb.isChecked()]
+            iv   = self.tab1.interval.value()
+            sd   = qdate_to_date(self.tab1.start_date.date())
+            if self.tab1.chk_infinite.isChecked():
+                ed = None
+            else:
+                ed = qdate_to_date(self.tab1.end_date.date())
+            pat = VisitPattern(days, iv, sd, ed)
 
-        # 4) Speichere in der DB
-        self.db.save_pattern(pat)
-
-        # 5) Füge in-memory und UI hinzu
-        self.patterns.append(pat)
-        item = QListWidgetItem(str(pat))
-        item.setData(Qt.UserRole, pat)
-        self.tab1.entry_list.addItem(item)
-
-        # 6) Kalender neu rendern
+            self.db.save_pattern(pat)
+            self.patterns.append(pat)
+            item = QListWidgetItem(str(pat))
+            item.setData(Qt.UserRole, pat)
+            self.tab1.entry_list.addItem(item)
+        finally:
+            self._mutex.unlock()
         self.refresh_calendar()
 
     def on_add_override(self):
-        f = qdate_to_date(self.tab1.ov_from.date())
-        t = qdate_to_date(self.tab1.ov_to.date())
-        if self.tab1.ov_add.isChecked():
-            pat = VisitPattern(list(range(7)),1,f)
-            ov  = OverridePeriod(f,t,pat)
-        else:
-            ov  = RemoveOverride(f,t)
-        self.db.save_override(ov)
-        self.overrides.append(ov)
-        item = QListWidgetItem(str(ov)); item.setData(Qt.UserRole, ov)
-        self.tab1.entry_list.addItem(item)
+        self._mutex.lock()
+        try:
+            f = qdate_to_date(self.tab1.ov_from.date())
+            t = qdate_to_date(self.tab1.ov_to.date())
+            if self.tab1.ov_add.isChecked():
+                pat = VisitPattern(list(range(7)),1,f)
+                ov  = OverridePeriod(f,t,pat)
+            else:
+                ov  = RemoveOverride(f,t)
+            self.db.save_override(ov)
+            self.overrides.append(ov)
+            item = QListWidgetItem(str(ov)); item.setData(Qt.UserRole, ov)
+            self.tab1.entry_list.addItem(item)
+        finally:
+            self._mutex.unlock()
         self.refresh_calendar()
 
     def on_delete_entry(self):
-        item = self.tab1.entry_list.currentItem()
-        if not item: return
-        obj  = item.data(Qt.UserRole)
-        if isinstance(obj, VisitPattern):
-            self.db.delete_pattern(obj.id); self.patterns.remove(obj)
-        else:
-            self.db.delete_override(obj.id); self.overrides.remove(obj)
-        self.tab1.entry_list.takeItem(self.tab1.entry_list.row(item))
+        self._mutex.lock()
+        try:
+            item = self.tab1.entry_list.currentItem()
+            if not item: return
+            obj  = item.data(Qt.UserRole)
+            if isinstance(obj, VisitPattern):
+                self.db.delete_pattern(obj.id); self.patterns.remove(obj)
+            else:
+                self.db.delete_override(obj.id); self.overrides.remove(obj)
+            self.tab1.entry_list.takeItem(self.tab1.entry_list.row(item))
+        finally:
+            self._mutex.unlock()
         self.refresh_calendar()
 
     def on_child_count_changed(self, index):
@@ -557,49 +574,50 @@ class MainWindow(QMainWindow):
         for i in range(index+1):
             cb = QCheckBox(f"Kind {i+1} nicht da")
             self.tab2.grid.addWidget(cb, i//2, i%2)
-            self.tab2.child_checks.append((i, cb))    
+            self.tab2.child_checks.append((i, cb))
+
     def on_calendar_click(self):
-        # Get the selected date and check if it's a planned visit day
         selected_date = qdate_to_date(self.tab2.calendar.selectedDate())
-        
-        # Generate planned dates for the year of the selected date
-        planned = apply_overrides(
-            sum((generate_standard_days(p, selected_date.year) for p in self.patterns), []),
-            self.overrides
-        )
 
-        # Return if the selected date is not a planned visit day
-        if selected_date not in planned:
-            return
-            
-        # Get currently checked children
-        checked_children = [i for i, cb in self.tab2.child_checks if cb.isChecked()]
-        if not checked_children:
-            return
-            
-        # Get existing visit status or create new one
-        vs = self.visit_status.get(selected_date, VisitStatus(day=selected_date))
-        
-        # Check if we're clicking with the same selection that caused the current status
-        current_status = (not vs.present_child_a, not vs.present_child_b)  # True means absent
-        new_status = (0 in checked_children, 1 in checked_children)
-        
-        if selected_date in self.visit_status and current_status == new_status:
-            # If clicking with same selection, reset to default (both present)
-            self.visit_status.pop(selected_date)
-            self.db.delete_status(selected_date)
-        else:
-            # Different selection or new entry - set according to checkboxes
-            vs.present_child_a = 0 not in checked_children  # Present if not checked
-            vs.present_child_b = 1 not in checked_children  # Present if not checked
-            self.visit_status[selected_date] = vs
-            self.db.save_status(vs)
+        self._mutex.lock()
+        try:
+            planned = apply_overrides(
+                sum((generate_standard_days(p, selected_date.year) for p in self.patterns), []),
+                self.overrides
+            )
 
-        # Refresh calendar to show updated colors
+            if selected_date not in planned:
+                return
+
+            checked_children = [i for i, cb in self.tab2.child_checks if cb.isChecked()]
+            if not checked_children:
+                return
+
+            vs = self.visit_status.get(selected_date, VisitStatus(day=selected_date))
+
+            current_status = (not vs.present_child_a, not vs.present_child_b)
+            new_status = (0 in checked_children, 1 in checked_children)
+
+            if selected_date in self.visit_status and current_status == new_status:
+                self.visit_status.pop(selected_date)
+                self.db.delete_status(selected_date)
+            else:
+                vs.present_child_a = 0 not in checked_children
+                vs.present_child_b = 1 not in checked_children
+                self.visit_status[selected_date] = vs
+                self.db.save_status(vs)
+        finally:
+            self._mutex.unlock()
+
         self.refresh_calendar()
 
     def on_reset_status(self):
-        self.visit_status.clear(); self.db.clear_status(); self.refresh_calendar()
+        self._mutex.lock()
+        try:
+            self.visit_status.clear(); self.db.clear_status()
+        finally:
+            self._mutex.unlock()
+        self.refresh_calendar()
 
     def on_export(self):
         df = qdate_to_date(self.tab3.date_from.date())
@@ -623,6 +641,13 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, 'Export-Fehler', msg)
 
     def cleanup(self):
+        # Stoppe Threads sauber vor dem Schließen
+        for thread_attr in ['export_thread', 'backup_thread', 'restore_thread', 'worker_thread']:
+            thread = getattr(self, thread_attr, None)
+            if thread and thread.isRunning():
+                thread.quit()
+                thread.wait()
+
         # Schließe die Datenbankverbindung, falls vorhanden
         if hasattr(self, 'db') and self.db:
             self.db.close()
