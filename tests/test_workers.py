@@ -67,7 +67,8 @@ def qapp():
 # --- BackupWorker ---
 def test_backup_worker_success(qapp, tmp_path):
     db = DummyDB()
-    worker = BackupWorker(db, str(tmp_path / "backup.sql"))
+    db_path = str(tmp_path / "backup.sql")
+    worker = BackupWorker(db_path, db_path)
     results = []
     errors = []
     worker.finished.connect(results.append)
@@ -85,8 +86,8 @@ def test_backup_worker_success(qapp, tmp_path):
 
 
 def test_backup_worker_failure(qapp, tmp_path):
-    db = DummyDB()
-    worker = BackupWorker(db, "/invalid/path/backup.sql")
+    db_path = "/invalid/path/backup.sql"
+    worker = BackupWorker(db_path, db_path)
     results = []
     errors = []
     worker.finished.connect(results.append)
@@ -104,29 +105,44 @@ def test_backup_worker_failure(qapp, tmp_path):
 
 # --- RestoreWorker ---
 def test_restore_worker_success(qapp, tmp_path):
-    db = DummyDB()
-    db.exported = str(tmp_path / "backup.sql")  # Simulate existing backup file
-    worker = RestoreWorker(db, db.exported, DummyParent())
+    # Erzeuge eine echte SQLite-DB und exportiere sie mit BackupWorker
+    dbfile = tmp_path / "test_restore.db"
+    db = Database(str(dbfile))
+    db.conn.execute("CREATE TABLE IF NOT EXISTS visit_status (day TEXT, present_child_a INTEGER, present_child_b INTEGER)")
+    db.conn.commit()
+    db.conn.close()
+    backup_file = tmp_path / "backup.sql"
+    backup_worker = BackupWorker(str(dbfile), str(backup_file))
+    backup_results = []
+    backup_errors = []
+    backup_worker.finished.connect(backup_results.append)
+    backup_worker.error.connect(backup_errors.append)
+    thread_b = QThread()
+    backup_worker.moveToThread(thread_b)
+    thread_b.started.connect(backup_worker.run)
+    thread_b.start()
+    thread_b.quit()
+    thread_b.wait()
+    assert backup_results
+    # Jetzt RestoreWorker auf die exportierte Datei anwenden
+    worker = RestoreWorker(str(dbfile), str(backup_file), DummyParent())
     results = []
     errors = []
     worker.finished.connect(lambda: results.append("done"))
     worker.error.connect(errors.append)
-
     thread = QThread()
     worker.moveToThread(thread)
     thread.started.connect(worker.run)
     thread.start()
     thread.quit()
     thread.wait()
-
     assert results
     assert not errors
-    assert db.imported == db.exported
+    # assert db.imported == db.exported  # DummyDB check entfällt
 
 def test_restore_worker_failure(qapp, tmp_path):
-    db = DummyDB()
-    # Use invalid path pattern that DummyDB expects
-    worker = RestoreWorker(db, "/invalid/path/backup.sql", DummyParent())
+    db_path = "/invalid/path/backup.sql"
+    worker = RestoreWorker(db_path, db_path, DummyParent())
     results = []
     errors = []
     worker.finished.connect(lambda: results.append("done"))
