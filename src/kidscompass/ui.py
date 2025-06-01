@@ -291,8 +291,14 @@ class StatisticsTab(QWidget):
         layout.addWidget(status_group)
 
         # — Button zum Berechnen —
+        btns = QHBoxLayout()
         self.btn_calc = QPushButton("Statistik berechnen")
-        layout.addWidget(self.btn_calc)
+        self.btn_export_csv = QPushButton("CSV Export")
+        self.btn_export_pdf = QPushButton("PDF Export")
+        btns.addWidget(self.btn_calc)
+        btns.addWidget(self.btn_export_csv)
+        btns.addWidget(self.btn_export_pdf)
+        layout.addLayout(btns)
 
         # — Ausgabe-Feld —
         self.result = QTextEdit()
@@ -301,48 +307,136 @@ class StatisticsTab(QWidget):
 
         # Signal:
         self.btn_calc.clicked.connect(self.on_calculate)
+        self.btn_export_csv.clicked.connect(self.on_export_csv)
+        self.btn_export_pdf.clicked.connect(self.on_export_pdf)
 
     def get_status_filters(self) -> dict:
-        """
-        Gibt ein Dict zurück, das genau die vier möglichen Filter-Keys
-        auf True/False setzt. Wird in query_visits() per status_filters.get("key") benutzt.
-        """
         d = {
             "both_present":   self.cb_both_present.isChecked(),
             "both_absent":    self.cb_both_absent.isChecked(),
             "a_absent":       self.cb_a_absent.isChecked(),
             "b_absent":       self.cb_b_absent.isChecked(),
         }
-        print("DEBUG: returning status_filters =", d)  # kurzer Debug-Print
         return d
 
     def on_calculate(self):
-        # 1) Gewählte Wochentage sammeln
         sel_wds = [i for i, cb in self.wd_checks if cb.isChecked()]
-
-        # 2) Datum von/bis
         start_d = self.date_from.date().toPython()
         end_d   = self.date_to.date().toPython()
-
-        # 3) Status-Filter als Dict
         status_filters = self.get_status_filters()
-        print("DEBUG: in on_calculate, status_filters =", status_filters)
-
-        # 4) Datenbank-Abfrage
-        db = self.parent.db  # habt ihr z.B. schon in MainWindow definiert
+        db = self.parent.db
         visits_list = db.query_visits(start_d, end_d, sel_wds, status_filters)
-
-        # 5) Ergebnis anzeigen (nur als Text, oder binden in count_missing_by_weekday o.Ä.)
-        total = len(visits_list)
-        missed_a = sum(not vs["present_child_a"] for vs in visits_list)
-        missed_b = sum(not vs["present_child_b"] for vs in visits_list)
-
+        # Tabellarische Übersicht
+        lines = ["Datum      | Wochentag | Status"]
+        weekday_names = ["Mo","Di","Mi","Do","Fr","Sa","So"]
+        for v in visits_list:
+            d = v["day"]
+            wd = weekday_names[d.weekday()]
+            if v["present_child_a"] and v["present_child_b"]:
+                status = "beide da"
+            elif not v["present_child_a"] and not v["present_child_b"]:
+                status = "beide fehlen"
+            elif not v["present_child_a"]:
+                status = "A fehlt"
+            else:
+                status = "B fehlt"
+            lines.append(f"{d.isoformat()} | {wd}        | {status}")
+        # Wochen mit vollständigen Besuchen
+        from collections import defaultdict
+        weekmap = defaultdict(list)
+        for v in visits_list:
+            if v["present_child_a"] and v["present_child_b"]:
+                year, week, _ = v["day"].isocalendar()
+                weekmap[(year, week)].append(v["day"])
+        full_weeks = [f"KW {w[1]} {w[0]}: {len(days)}x beide da" for w, days in weekmap.items()]
+        # Wochentagsauswertung
+        weekday_count = defaultdict(int)
+        for v in visits_list:
+            if v["present_child_a"] and v["present_child_b"]:
+                weekday_count[v["day"].weekday()] += 1
+        weekday_stats = [f"{weekday_names[i]}: {weekday_count[i]}x beide da" for i in range(7)]
+        # Zusammenfassung
         summary = (
-            f"Gefundene Termine: {total}\n"
-            f"Kind A Abwesenheiten: {missed_a}\n"
-            f"Kind B Abwesenheiten: {missed_b}\n"
+            f"Gefundene Termine: {len(visits_list)}\n"
+            f"Kind A Abwesenheiten: {sum(not v['present_child_a'] for v in visits_list)}\n"
+            f"Kind B Abwesenheiten: {sum(not v['present_child_b'] for v in visits_list)}\n"
         )
-        self.result.setPlainText(summary)
+        output = summary + "\nTabellarische Übersicht:\n" + "\n".join(lines)
+        output += "\n\nWochen mit vollständigen Besuchen (beide da):\n" + "\n".join(full_weeks)
+        output += "\n\nWochentagsauswertung (beide da):\n" + "\n".join(weekday_stats)
+        self.result.setPlainText(output)
+        self.filtered_visits = visits_list  # Für Export
+
+    def on_export_csv(self):
+        import csv
+        from PySide6.QtWidgets import QFileDialog
+        if not hasattr(self, 'filtered_visits') or not self.filtered_visits:
+            QMessageBox.warning(self, "Export", "Bitte zuerst Statistik berechnen.")
+            return
+        fn, _ = QFileDialog.getSaveFileName(self, "CSV Export speichern", filter="CSV-Datei (*.csv)")
+        if not fn:
+            return
+        with open(fn, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(["Datum", "Wochentag", "A anwesend", "B anwesend"])
+            weekday_names = ["Mo","Di","Mi","Do","Fr","Sa","So"]
+            for v in self.filtered_visits:
+                d = v["day"]
+                wd = weekday_names[d.weekday()]
+                writer.writerow([d.isoformat(), wd, v["present_child_a"], v["present_child_b"]])
+        QMessageBox.information(self, "Export", f"CSV erfolgreich gespeichert: {fn}")
+
+    def on_export_pdf(self):
+        from PySide6.QtWidgets import QFileDialog
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+        if not hasattr(self, 'filtered_visits') or not self.filtered_visits:
+            QMessageBox.warning(self, "Export", "Bitte zuerst Statistik berechnen.")
+            return
+        fn, _ = QFileDialog.getSaveFileName(self, "PDF Export speichern", filter="PDF-Datei (*.pdf)")
+        if not fn:
+            return
+        c = canvas.Canvas(fn, pagesize=letter)
+        w, h = letter
+        y = h - 40
+        c.setFont('Helvetica-Bold', 14)
+        c.drawString(50, y, 'KidsCompass Statistik-Export')
+        y -= 30
+        c.setFont('Helvetica', 10)
+        c.drawString(50, y, f"Zeitraum: {self.date_from.date().toString()} bis {self.date_to.date().toString()}")
+        y -= 20
+        c.drawString(50, y, f"Gefundene Termine: {len(self.filtered_visits)}")
+        y -= 20
+        c.drawString(50, y, f"Kind A Abwesenheiten: {sum(not v['present_child_a'] for v in self.filtered_visits)}")
+        y -= 20
+        c.drawString(50, y, f"Kind B Abwesenheiten: {sum(not v['present_child_b'] for v in self.filtered_visits)}")
+        y -= 30
+        c.setFont('Helvetica-Bold', 12)
+        c.drawString(50, y, "Datum      | Wochentag | Status")
+        y -= 20
+        weekday_names = ["Mo","Di","Mi","Do","Fr","Sa","So"]
+        for v in self.filtered_visits:
+            if y < 60:
+                c.showPage()
+                y = h - 40
+                c.setFont('Helvetica-Bold', 12)
+                c.drawString(50, y, "Datum      | Wochentag | Status")
+                y -= 20
+                c.setFont('Helvetica', 10)
+            d = v["day"]
+            wd = weekday_names[d.weekday()]
+            if v["present_child_a"] and v["present_child_b"]:
+                status = "beide da"
+            elif not v["present_child_a"] and not v["present_child_b"]:
+                status = "beide fehlen"
+            elif not v["present_child_a"]:
+                status = "A fehlt"
+            else:
+                status = "B fehlt"
+            c.drawString(50, y, f"{d.isoformat()} | {wd}        | {status}")
+            y -= 15
+        c.save()
+        QMessageBox.information(self, "Export", f"PDF erfolgreich gespeichert: {fn}")
 
 class ExportWorker(QObject):
     finished = Signal(str)
