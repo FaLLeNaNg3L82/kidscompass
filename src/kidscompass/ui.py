@@ -202,12 +202,12 @@ class ExportTab(QWidget):
     def on_backup(self):
         if hasattr(self.parent, 'backup_thread') and self.parent.backup_thread and self.parent.backup_thread.isRunning():
             return
-
         fn, _ = QFileDialog.getSaveFileName(self, BACKUP_TITLE, filter=SQL_FILE_FILTER)
         if not fn:
             return
         self.backup_thread = QThread()
-        self.backup_worker = BackupWorker(self.parent.db, fn)
+        db_path = self.parent.db.db_path if hasattr(self.parent.db, 'db_path') else self.parent.db.filename
+        self.backup_worker = BackupWorker(db_path, fn)
         self.backup_worker.moveToThread(self.backup_thread)
         self.backup_thread.started.connect(self.backup_worker.run)
         self.backup_worker.finished.connect(self.on_backup_finished)
@@ -237,7 +237,8 @@ class ExportTab(QWidget):
         if confirm != QMessageBox.Yes:
             return
         self.restore_thread = QThread()
-        self.restore_worker = RestoreWorker(self.parent.db, fn, self.parent)
+        db_path = self.parent.db.db_path if hasattr(self.parent.db, 'db_path') else self.parent.db.filename
+        self.restore_worker = RestoreWorker(db_path, fn, self.parent)
         self.restore_worker.moveToThread(self.restore_thread)
         self.restore_thread.started.connect(self.restore_worker.run)
         self.restore_worker.finished.connect(self.on_restore_finished)
@@ -729,9 +730,9 @@ class BackupWorker(QObject):
     finished = Signal(str)
     error = Signal(str)
 
-    def __init__(self, db, fn):
+    def __init__(self, db_path, fn):
         super().__init__()
-        self.db = db
+        self.db_path = db_path
         self.fn = fn
         self._stopped = False
 
@@ -741,9 +742,11 @@ class BackupWorker(QObject):
     def run(self):
         if self._stopped:
             return
-
         try:
-            self.db.export_to_sql(self.fn)
+            from kidscompass.data import Database
+            db = Database(self.db_path)
+            db.export_to_sql(self.fn)
+            db.close()
             if not self._stopped:
                 self.finished.emit(self.fn)
         except OSError as e:
@@ -759,9 +762,9 @@ class RestoreWorker(QObject):
     finished = Signal()
     error = Signal(str)
 
-    def __init__(self, db, fn, parent):
+    def __init__(self, db_path, fn, parent):
         super().__init__()
-        self.db = db
+        self.db_path = db_path
         self.fn = fn
         self.parent = parent
         self._stopped = False
@@ -772,20 +775,20 @@ class RestoreWorker(QObject):
     def run(self):
         if self._stopped:
             return
-
         try:
-            self.db.import_from_sql(self.fn)
+            from kidscompass.data import Database
+            db = Database(self.db_path)
+            db.import_from_sql(self.fn)
             if self._stopped:
+                db.close()
                 return
-
-            self.parent.visit_status = self.db.load_all_status()
-            self.parent.patterns = self.db.load_patterns()
-            self.parent.overrides = self.db.load_overrides()
+            self.parent.visit_status = db.load_all_status()
+            self.parent.patterns = db.load_patterns()
+            self.parent.overrides = db.load_overrides()
+            db.close()
             self.parent.refresh_calendar()
-
             if not self._stopped:
                 self.finished.emit()
-
         except IOError as e:
             if not self._stopped:
                 self.error.emit(f"Dateifehler: {e}")
