@@ -1,0 +1,8 @@
+PySide6
+matplotlib
+numpy
+reportlab
+ntplib
+pillow
+python-dateutil
+pytest
