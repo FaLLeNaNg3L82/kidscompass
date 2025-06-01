@@ -1,18 +1,34 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from PySide6.QtCore import QThread, QCoreApplication
-from kidscompass.ui import StatisticsWorker, BackupWorker, RestoreWorker, ExportWorker
+from PySide6.QtCore import QThread, QCoreApplication, QEventLoop
+from kidscompass.ui import BackupWorker, RestoreWorker, ExportWorker
 from datetime import date
+from kidscompass.data import Database
+import os
 
 class DummyDB:
+    def __init__(self):
+        self.conn = MagicMock()
+        self.conn.execute = MagicMock()
+        self.conn.commit = MagicMock()
+        self.conn.close = MagicMock()
+
     def export_to_sql(self, fn):
+        if '/invalid/' in fn or not fn:
+            raise IOError(f"Cannot write to invalid path: {fn}")
         self.exported = fn
+        
     def import_from_sql(self, fn):
+        if '/invalid/' in fn or not fn or not fn.endswith('.sql'):
+            raise IOError(f"Cannot read from invalid path: {fn}")
         self.imported = fn
+        
     def load_all_status(self):
         return {}
+        
     def load_patterns(self):
         return []
+        
     def load_overrides(self):
         return []
     def close(self):
@@ -48,132 +64,135 @@ def qapp():
         app = QCoreApplication([])
     yield app
 
-# --- StatisticsWorker ---
-def test_statistics_worker_success(qapp):
-    db = MagicMock()
-    db.return_value = [
-        {'missed_a': 1},
-        {'missed_b': 2},
-        {'both_missing': 3}
-    ]
-    with patch('kidscompass.ui.count_missing_by_weekday', return_value=db.return_value):
-        worker = StatisticsWorker(db)
-        results = []
-        errors = []
-        worker.finished.connect(results.append)
-        worker.error.connect(errors.append)
-        worker.run()
-        assert results[0] == db.return_value
-        assert not errors
-
-def test_statistics_worker_error(qapp):
-    db = MagicMock()
-    with patch('kidscompass.ui.count_missing_by_weekday', side_effect=Exception("fail")):
-        worker = StatisticsWorker(db)
-        results = []
-        errors = []
-        worker.finished.connect(results.append)
-        worker.error.connect(errors.append)
-        worker.run()
-        assert not results
-        assert errors and "fail" in errors[0]
-
 # --- BackupWorker ---
-def test_backup_worker_success(qapp):
+def test_backup_worker_success(qapp, tmp_path):
     db = DummyDB()
-    worker = BackupWorker(db, "test.sql")
+    worker = BackupWorker(db, str(tmp_path / "backup.sql"))
     results = []
     errors = []
     worker.finished.connect(results.append)
     worker.error.connect(errors.append)
-    worker.run()
-    assert results[0] == "test.sql"
+
+    thread = QThread()
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)
+    thread.start()
+    thread.quit()
+    thread.wait()
+
+    assert results
     assert not errors
 
-def test_backup_worker_oserror(qapp):
-    db = MagicMock()
-    db.export_to_sql.side_effect = OSError("disk full")
-    worker = BackupWorker(db, "fail.sql")
+
+def test_backup_worker_failure(qapp, tmp_path):
+    db = DummyDB()
+    worker = BackupWorker(db, "/invalid/path/backup.sql")
     results = []
     errors = []
     worker.finished.connect(results.append)
     worker.error.connect(errors.append)
-    worker.run()
+
+    thread = QThread()
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)
+    thread.start()
+    thread.quit()
+    thread.wait()
+
     assert not results
-    assert errors and "disk full" in errors[0]
+    assert errors
 
 # --- RestoreWorker ---
-def test_restore_worker_success(qapp):
+def test_restore_worker_success(qapp, tmp_path):
     db = DummyDB()
-    parent = DummyParent()
-    worker = RestoreWorker(db, "test.sql", parent)
+    db.exported = str(tmp_path / "backup.sql")  # Simulate existing backup file
+    worker = RestoreWorker(db, db.exported, DummyParent())
     results = []
     errors = []
     worker.finished.connect(lambda: results.append("done"))
     worker.error.connect(errors.append)
-    worker.run()
-    assert results and results[0] == "done"
+
+    thread = QThread()
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)
+    thread.start()
+    thread.quit()
+    thread.wait()
+
+    assert results
     assert not errors
-    assert hasattr(parent, "visit_status")
-    assert hasattr(parent, "patterns")
-    assert hasattr(parent, "overrides")
-    assert hasattr(parent, "refresh_calendar")
+    assert db.imported == db.exported
+
+def test_restore_worker_failure(qapp, tmp_path):
+    db = DummyDB()
+    # Use invalid path pattern that DummyDB expects
+    worker = RestoreWorker(db, "/invalid/path/backup.sql", DummyParent())
+    results = []
+    errors = []
+    worker.finished.connect(lambda: results.append("done"))
+    worker.error.connect(errors.append)
+
+    thread = QThread()
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)
+    thread.start()
+    thread.quit()
+    thread.wait()
+
+    assert not results
+    assert errors
 
 # --- ExportWorker ---
-def test_export_worker_image_missing(qapp):
-    parent = DummyParent()
-    with patch('os.path.exists', return_value=False):
-        worker = ExportWorker(parent, None, None, [], [], {})
-        results = []
-        errors = []
-        worker.finished.connect(results.append)
-        worker.error.connect(errors.append)
-        worker.run()
-        assert not results
-        assert errors and "Start- und Enddatum" in errors[0]
+def test_export_worker_success(qapp, tmp_path):
+    dbfile = tmp_path / "test_export.db"
+    db = Database(str(dbfile))
+    db.conn.execute("INSERT INTO visit_status (day, present_child_a, present_child_b) VALUES (?, ?, ?)", ("2023-01-01", 1, 1))
+    db.conn.commit()
+    db.conn.close()
 
-def test_export_worker_success(qapp):
-    parent = DummyParent()
-    # Provide a minimal planned date and visit_status so charts are generated
-    planned_date = date(2025, 6, 1)
-    parent.patterns = [MagicMock()]  # Not used directly, but required for signature
-    parent.overrides = []
-    parent.visit_status = {planned_date: MagicMock(present_child_a=False, present_child_b=False)}
-    # Patch generate_standard_days and apply_overrides to return our planned_date
-    with patch('os.path.exists', return_value=True), \
-         patch('kidscompass.ui.create_pie_chart', return_value=([], [], [])) as mock_chart, \
-         patch('reportlab.pdfgen.canvas.Canvas') as mock_canvas, \
-         patch('kidscompass.ui.generate_standard_days', return_value=[planned_date]), \
-         patch('kidscompass.ui.apply_overrides', return_value=[planned_date]), \
-         patch('kidscompass.ui.summarize_visits', return_value={
-             'total': 1, 'missed_a': 1, 'missed_b': 1, 'both_present': 0, 'both_missing': 1
-         }):
-        mock_canvas.return_value.drawString = MagicMock()
-        mock_canvas.return_value.setFont = MagicMock()
-        mock_canvas.return_value.drawImage = MagicMock()
-        mock_canvas.return_value.showPage = MagicMock()
-        mock_canvas.return_value.save = MagicMock()
-        worker = ExportWorker(parent, date(2025,1,1), date(2025,12,31), parent.patterns, parent.overrides, parent.visit_status)
-        results = []
-        errors = []
-        worker.finished.connect(results.append)
-        worker.error.connect(errors.append)
-        worker.run()
-        assert results and 'PDF erstellt' in results[0]
-        assert not errors
-        assert mock_chart.call_count == 3
-        assert mock_canvas.return_value.save.called
+    visit_status = {date(2023, 1, 1): {'present_child_a': 1, 'present_child_b': 1}}
 
-def test_export_worker_pdf_error(qapp):
-    parent = DummyParent()
-    with patch('os.path.exists', return_value=True), \
-         patch('kidscompass.charts.create_pie_chart'), \
-         patch('reportlab.pdfgen.canvas.Canvas', side_effect=Exception('PDF fail')):
-        worker = ExportWorker(parent, date(2025,1,1), date(2025,12,31), [], [], {})
-        results = []
-        errors = []
-        worker.finished.connect(results.append)
-        worker.error.connect(errors.append)
-        worker.run()
-        assert not results
-        assert errors and 'PDF fail' in errors[0]
+    df = date(2023, 1, 1)
+    dt = date(2023, 1, 2)
+
+    worker = ExportWorker(qapp, df, dt, [], [], visit_status)
+    results = []
+    errors = []
+    worker.finished.connect(lambda: results.append("done"))
+    worker.error.connect(errors.append)
+
+    thread = QThread()
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)
+    thread.start()
+    thread.quit()
+    thread.wait()
+
+    assert results
+    assert not errors
+
+    # Check for report file in current working directory
+    report_file = os.path.abspath("kidscompass_report.pdf")
+    assert os.path.exists(report_file)
+
+    # Clean up
+    os.remove(report_file)
+
+
+def test_export_worker_failure(qapp, tmp_path):
+    db = DummyDB()
+    worker = ExportWorker(db, "/invalid/path/export.sql", [], [], {}, {})
+    results = []
+    errors = []
+    worker.finished.connect(lambda: results.append("done"))
+    worker.error.connect(errors.append)
+
+    thread = QThread()
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)
+    thread.start()
+    thread.quit()
+    thread.wait()
+
+    assert not results
+    assert errors

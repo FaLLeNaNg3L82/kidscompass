@@ -1,5 +1,5 @@
 import sys
-from datetime import date
+import datetime
 from typing import List
 import os
 import logging
@@ -21,7 +21,11 @@ from PySide6.QtGui import QTextCharFormat, QBrush, QColor
 from PySide6.QtCore import Qt, QDate, QThread, Signal, QObject, QMutex
 from kidscompass.calendar_logic import generate_standard_days, apply_overrides
 from kidscompass.data import Database
-from kidscompass.statistics import count_missing_by_weekday, summarize_visits
+from kidscompass.statistics import count_missing_by_weekday, summarize_visits, calculate_trends
+import matplotlib.pyplot as plt
+from PySide6.QtWidgets import QLabel
+from PySide6.QtGui import QPixmap
+import tempfile
 
 
 
@@ -50,7 +54,7 @@ COLOR_BOTH_MISSING = '#FF0000'  # Beide fehlen = rot
 
 def qdate_to_date(qdate):
     """Hilfsfunktion: QDate -> datetime.date"""
-    return qdate.toPython() if hasattr(qdate, 'toPython') else date(qdate.year(), qdate.month(), qdate.day())
+    return qdate.toPython() if hasattr(qdate, 'toPython') else datetime.date(qdate.year(), qdate.month(), qdate.day())
 
 # === UI Text Constants ===
 BACKUP_BTN_TEXT = "DB Backup"
@@ -99,10 +103,10 @@ class SettingsTab(QWidget):
         self.interval = QSpinBox(); self.interval.setRange(1, 52); self.interval.setValue(1)
         param_layout.addWidget(self.interval)
         param_layout.addWidget(QLabel(FROM_LABEL))
-        self.start_date = QDateEdit(QDate(date.today().year, 1, 1)); self.start_date.setCalendarPopup(True)
+        self.start_date = QDateEdit(QDate(datetime.date.today().year, 1, 1)); self.start_date.setCalendarPopup(True)
         param_layout.addWidget(self.start_date)
         param_layout.addWidget(QLabel(TO_LABEL))
-        self.end_date = QDateEdit(QDate(date.today().year, 12, 31)); self.end_date.setCalendarPopup(True)
+        self.end_date = QDateEdit(QDate(datetime.date.today().year, 12, 31)); self.end_date.setCalendarPopup(True)
         param_layout.addWidget(self.end_date)
         self.chk_infinite = QCheckBox(INFINITE_LABEL)
         param_layout.addWidget(self.chk_infinite)
@@ -250,80 +254,322 @@ class ExportTab(QWidget):
         logging.error(f"Restore error: {msg}")
         QMessageBox.critical(self, RESTORE_ERROR_TITLE, msg)
 
-class StatisticsWorker(QObject):
-    finished = Signal(list)
-    error = Signal(str)
-
-    def __init__(self, db):
-        super().__init__()
-        self.db = db
-
-    def run(self):
-        try:
-            stats = count_missing_by_weekday(self.db)
-            self.finished.emit(stats)
-        except Exception as e:
-            logging.error(f"StatisticsWorker error: {e}")
-            self.error.emit(str(e))
-
 class StatisticsTab(QWidget):
     def __init__(self, parent):
         super().__init__()
         self.parent = parent
         layout = QVBoxLayout(self)
 
-        period = QHBoxLayout(); period.addWidget(QLabel(FROM_LABEL))
-        self.date_from = QDateEdit(QDate.currentDate()); self.date_from.setCalendarPopup(True)
-        period.addWidget(self.date_from); period.addWidget(QLabel(TO_LABEL))
-        self.date_to = QDateEdit(QDate.currentDate()); self.date_to.setCalendarPopup(True)
-        period.addWidget(self.date_to); layout.addLayout(period)
+        # — Zeitraum —
+        period = QHBoxLayout()
+        period.addWidget(QLabel("Von:"))
+        self.date_from = QDateEdit(QDate.currentDate())
+        self.date_from.setCalendarPopup(True)
+        period.addWidget(self.date_from)
+        period.addWidget(QLabel("Bis:"))
+        self.date_to = QDateEdit(QDate.currentDate())
+        self.date_to.setCalendarPopup(True)
+        period.addWidget(self.date_to)
+        layout.addLayout(period)
 
-        wd_group = QGroupBox("Wochentage")
-        wd_l = QHBoxLayout(wd_group)
+        # — Wochentags-Filter —
+        wd_group = QGroupBox("Wochentage wählen")
+        wd_layout = QHBoxLayout(wd_group)
         self.wd_checks = []
-        for i,name in enumerate(['Mo','Di','Mi','Do','Fr','Sa','So']):
-            cb = QCheckBox(name); wd_l.addWidget(cb); self.wd_checks.append((i,cb))
+        for i, name in enumerate(["Mo","Di","Mi","Do","Fr","Sa","So"]):
+            cb = QCheckBox(name)
+            wd_layout.addWidget(cb)
+            self.wd_checks.append((i, cb))
         layout.addWidget(wd_group)
 
-        status_group = QGroupBox("Status-Filter")
-        sl = QHBoxLayout(status_group)
-        self.cb_a_absent = QCheckBox("A fehlt"); self.cb_b_absent = QCheckBox("B fehlt")
-        self.cb_both_absent = QCheckBox("beide fehlen"); self.cb_both_present = QCheckBox("beide da")
-        for cb in (self.cb_a_absent,self.cb_b_absent,self.cb_both_absent,self.cb_both_present): sl.addWidget(cb)
+        # — Status-Filter als Dropdown —
+        status_group = QGroupBox("Statistik für ...")
+        status_layout = QHBoxLayout(status_group)
+        self.status_combo = QComboBox()
+        self.status_combo.addItems(["Kind A", "Kind B", "Beide"])
+        status_layout.addWidget(QLabel("Auswertung für:"))
+        status_layout.addWidget(self.status_combo)
         layout.addWidget(status_group)
 
-        self.btn_calc = QPushButton(STATISTICS_BTN_TEXT); layout.addWidget(self.btn_calc)
-        self.result   = QTextEdit(); self.result.setReadOnly(True); layout.addWidget(self.result)
-        self.btn_calc.clicked.connect(self.on_calculate)
+        # — Export-Buttons —
+        btns = QHBoxLayout()
+        self.btn_export_csv = QPushButton("CSV Export")
+        self.btn_export_pdf = QPushButton("PDF Export")
+        btns.addWidget(self.btn_export_csv)
+        btns.addWidget(self.btn_export_pdf)
+        layout.addLayout(btns)
 
-    def on_calculate(self):
-        if hasattr(self.parent, 'worker_thread') and self.parent.worker_thread and self.parent.worker_thread.isRunning():
+        # — Ausgabe-Feld —
+        self.result = QTextEdit()
+        self.result.setReadOnly(True)
+        layout.addWidget(self.result)
+        # Trend-Chart
+        self.chart_label = QLabel()
+        self.chart_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.chart_label)
+
+        # Signals: Filteränderungen triggern Statistik
+        self.date_from.dateChanged.connect(self.on_any_filter_changed)
+        self.date_to.dateChanged.connect(self.on_any_filter_changed)
+        for _, cb in self.wd_checks:
+            cb.stateChanged.connect(self.on_any_filter_changed)
+        self.status_combo.currentIndexChanged.connect(self.on_any_filter_changed)
+        self.btn_export_csv.clicked.connect(self.on_export_csv)
+        self.btn_export_pdf.clicked.connect(self.on_export_pdf)
+
+        # Initiale Berechnung
+        self.on_any_filter_changed()
+
+    def get_status_mode(self):
+        # Gibt zurück, was im Dropdown gewählt ist
+        return self.status_combo.currentText()
+
+    def on_any_filter_changed(self):
+        sel_wds = [i for i, cb in self.wd_checks if cb.isChecked()]
+        start_d = self.date_from.date().toPython()
+        end_d   = self.date_to.date().toPython()
+        mode = self.get_status_mode()
+        db = self.parent.db
+        visits_list = db.query_visits(start_d, end_d, sel_wds, {
+            "both_present": False,  # Kein Vorfilter mehr, wir werten alles aus
+            "a_absent": False,
+            "b_absent": False,
+            "both_absent": False
+        })
+        from collections import defaultdict
+        weekday_names = ["Mo","Di","Mi","Do","Fr","Sa","So"]
+        total = len(visits_list)
+        if mode == "Beide":
+            # Für beide Kinder getrennt auswerten
+            rel_a = sum(1 for v in visits_list if v["present_child_a"])
+            rel_b = sum(1 for v in visits_list if v["present_child_b"])
+            miss_a = total - rel_a
+            miss_b = total - rel_b
+            pct_rel_a = round(rel_a/total*100,1) if total else 0.0
+            pct_rel_b = round(rel_b/total*100,1) if total else 0.0
+            pct_miss_a = round(miss_a/total*100,1) if total else 0.0
+            pct_miss_b = round(miss_b/total*100,1) if total else 0.0
+            # Wochentagsauswertung
+            weekday_count_a = defaultdict(int)
+            weekday_count_b = defaultdict(int)
+            for v in visits_list:
+                if v["present_child_a"]:
+                    weekday_count_a[v["day"].weekday()] += 1
+                if v["present_child_b"]:
+                    weekday_count_b[v["day"].weekday()] += 1
+            weekday_stats = [
+                f"{weekday_names[i]}: A {weekday_count_a[i]}x ({round(weekday_count_a[i]/total*100,1) if total else 0.0}%), "
+                f"B {weekday_count_b[i]}x ({round(weekday_count_b[i]/total*100,1) if total else 0.0}%)"
+                for i in range(7)
+            ]
+            # Entwicklung der letzten 1, 3, 6 Monate
+            today = datetime.date.today()
+            def count_in_period(months, key):
+                from dateutil.relativedelta import relativedelta
+                since = today - relativedelta(months=months)
+                return sum(1 for v in visits_list if v["day"] >= since and v[key])
+            rel_1m_a = count_in_period(1, "present_child_a")
+            rel_3m_a = count_in_period(3, "present_child_a")
+            rel_6m_a = count_in_period(6, "present_child_a")
+            rel_1m_b = count_in_period(1, "present_child_b")
+            rel_3m_b = count_in_period(3, "present_child_b")
+            rel_6m_b = count_in_period(6, "present_child_b")
+            def pct_change(now, prev):
+                return round((now-prev)/prev*100,1) if prev else 0.0
+            trend_1m_a = pct_change(rel_1m_a, rel_3m_a-rel_1m_a)
+            trend_3m_a = pct_change(rel_3m_a, rel_6m_a-rel_3m_a)
+            trend_1m_b = pct_change(rel_1m_b, rel_3m_b-rel_1m_b)
+            trend_3m_b = pct_change(rel_3m_b, rel_6m_b-rel_3m_b)
+            summary = (
+                f"Gefundene Termine: {total}\n"
+                f"Kind A anwesend: {rel_a} ({pct_rel_a}%)\nKind A abwesend: {miss_a} ({pct_miss_a}%)\n"
+                f"Kind B anwesend: {rel_b} ({pct_rel_b}%)\nKind B abwesend: {miss_b} ({pct_miss_b}%)\n"
+                f"\nWochentagsauswertung:\n" + "\n".join(weekday_stats) +
+                f"\n\nEntwicklung Umgangsfrequenz:\n"
+                f"Kind A letzter Monat: {rel_1m_a} ({trend_1m_a}% Veränderung)\nKind A letzte 3 Monate: {rel_3m_a} ({trend_3m_a}% Veränderung)\nKind A letzte 6 Monate: {rel_6m_a}\n"
+                f"Kind B letzter Monat: {rel_1m_b} ({trend_1m_b}% Veränderung)\nKind B letzte 3 Monate: {rel_3m_b} ({trend_3m_b}% Veränderung)\nKind B letzte 6 Monate: {rel_6m_b}"
+            )
+            self.result.setPlainText(summary)
+            self.filtered_visits = visits_list
+            self.update_trend_chart(visits_list)  # alle visits für beide Linien
+        else:
+            # Einzelkind-Modus wie gehabt
+            relevant = [v for v in visits_list if v["present_child_a"]] if mode=="Kind A" else [v for v in visits_list if v["present_child_b"]]
+            missed = [v for v in visits_list if not v["present_child_a"]] if mode=="Kind A" else [v for v in visits_list if not v["present_child_b"]]
+            rel = len(relevant)
+            miss = len(missed)
+            pct_rel = round(rel/total*100,1) if total else 0.0
+            pct_miss = round(miss/total*100,1) if total else 0.0
+            weekday_count = defaultdict(int)
+            for v in relevant:
+                weekday_count[v["day"].weekday()] += 1
+            weekday_stats = [f"{weekday_names[i]}: {weekday_count[i]}x ({round(weekday_count[i]/total*100,1) if total else 0.0}%)" for i in range(7)]
+            today = datetime.date.today()
+            def count_in_period(months):
+                from dateutil.relativedelta import relativedelta
+                since = today - relativedelta(months=months)
+                return len([v for v in relevant if v["day"] >= since])
+            rel_1m = count_in_period(1)
+            rel_3m = count_in_period(3)
+            rel_6m = count_in_period(6)
+            def pct_change(now, prev):
+                return round((now-prev)/prev*100,1) if prev else 0.0
+            trend_1m = pct_change(rel_1m, rel_3m-rel_1m)
+            trend_3m = pct_change(rel_3m, rel_6m-rel_3m)
+            summary = (
+                f"Gefundene Termine: {total}\n"
+                f"{mode} anwesend: {rel} ({pct_rel}%)\n"
+                f"{mode} abwesend: {miss} ({pct_miss}%)\n"
+                f"\nWochentagsauswertung ({mode} anwesend):\n" + "\n".join(weekday_stats) +
+                f"\n\nEntwicklung Umgangsfrequenz:\nLetzter Monat: {rel_1m} ({trend_1m}% Veränderung)\nLetzte 3 Monate: {rel_3m} ({trend_3m}% Veränderung)\nLetzte 6 Monate: {rel_6m}"
+            )
+            self.result.setPlainText(summary)
+            self.filtered_visits = visits_list
+            self.update_trend_chart(relevant)
+
+    def update_trend_chart(self, relevant):
+        mode = self.get_status_mode()
+        if not self.filtered_visits:
+            self.chart_label.clear()
             return
+        from collections import Counter, defaultdict
+        import calendar
+        # Berechne geplante Umgangstage pro Monat
+        all_months = set()
+        planned_per_month = defaultdict(int)
+        for v in self.filtered_visits:
+            m = v['day'].replace(day=1)
+            planned_per_month[m] += 1
+            all_months.add(m)
+        sorted_months = sorted(all_months)
+        # Berechne tatsächliche Anwesenheit pro Monat
+        if mode == 'Beide':
+            present_a = defaultdict(int)
+            present_b = defaultdict(int)
+            for v in self.filtered_visits:
+                m = v['day'].replace(day=1)
+                if v['present_child_a']:
+                    present_a[m] += 1
+                if v['present_child_b']:
+                    present_b[m] += 1
+            x = [m.strftime('%Y-%m') for m in sorted_months]
+            y_a = [round(present_a[m]/planned_per_month[m]*100,1) if planned_per_month[m] else 0 for m in sorted_months]
+            y_b = [round(present_b[m]/planned_per_month[m]*100,1) if planned_per_month[m] else 0 for m in sorted_months]
+            fig, ax = plt.subplots(figsize=(5,2.5))
+            ax.plot(x, y_a, marker='o', color='#1976d2', label='Kind A')
+            ax.plot(x, y_b, marker='o', color='#d32f2f', label='Kind B')
+            ax.set_title('Anwesenheit pro Monat (%)')
+            ax.set_xlabel('Monat')
+            ax.set_ylabel('Anwesenheit (%)')
+            ax.set_ylim(0, 105)
+            ax.legend()
+            ax.grid(True, linestyle=':')
+            plt.xticks(rotation=30, ha='right')
+            fig.tight_layout()
+        else:
+            present = defaultdict(int)
+            for v in self.filtered_visits:
+                m = v['day'].replace(day=1)
+                if (v['present_child_a'] if mode=='Kind A' else v['present_child_b']):
+                    present[m] += 1
+            x = [m.strftime('%Y-%m') for m in sorted_months]
+            y = [round(present[m]/planned_per_month[m]*100,1) if planned_per_month[m] else 0 for m in sorted_months]
+            fig, ax = plt.subplots(figsize=(5,2.5))
+            ax.plot(x, y, marker='o', color='#1976d2')
+            ax.set_title(f'Anwesenheit {mode} pro Monat (%)')
+            ax.set_xlabel('Monat')
+            ax.set_ylabel('Anwesenheit (%)')
+            ax.set_ylim(0, 105)
+            ax.grid(True, linestyle=':')
+            plt.xticks(rotation=30, ha='right')
+            fig.tight_layout()
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+            fig.savefig(tmp.name, bbox_inches='tight')
+            plt.close(fig)
+            self.chart_label.setPixmap(QPixmap(tmp.name))
 
-        self.btn_calc.setEnabled(False)
-        self.result.clear()
-        self.worker_thread = QThread()
-        self.worker = StatisticsWorker(self.parent.db)
-        self.worker.moveToThread(self.worker_thread)
-        self.worker_thread.started.connect(self.worker.run)
-        self.worker.finished.connect(self.on_calculate_finished)
-        self.worker.error.connect(self.on_calculate_error)
-        self.worker.finished.connect(self.worker_thread.quit)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
-        self.worker_thread.start()
+    def on_export_csv(self):
+        import csv
+        from PySide6.QtWidgets import QFileDialog
+        if not hasattr(self, 'filtered_visits') or not self.filtered_visits:
+            QMessageBox.warning(self, "Export", "Bitte zuerst Filter setzen.")
+            return
+        fn, _ = QFileDialog.getSaveFileName(self, "CSV Export speichern", filter="CSV-Datei (*.csv)")
+        if not fn:
+            return
+        with open(fn, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(["Datum", "Wochentag", "A anwesend", "B anwesend"])
+            weekday_names = ["Mo","Di","Mi","Do","Fr","Sa","So"]
+            for v in self.filtered_visits:
+                d = v["day"]
+                wd = weekday_names[d.weekday()]
+                writer.writerow([d.isoformat(), wd, v["present_child_a"], v["present_child_b"]])
+        QMessageBox.information(self, "Export", f"CSV erfolgreich gespeichert: {fn}")
 
-    def on_calculate_finished(self, stats):
-        self.btn_calc.setEnabled(True)
-        text = f"A fehlt: {stats[0]['missed_a']}\n"
-        text += f"B fehlt: {stats[1]['missed_b']}\n"
-        text += f"Beide fehlen: {stats[2]['both_missing']}"
-        self.result.setPlainText(text)
-
-    def on_calculate_error(self, msg):
-        logging.error(f"Statistics error: {msg}")
-        self.btn_calc.setEnabled(True)
-        QMessageBox.critical(self, "Fehler bei Statistik", msg)
+    def on_export_pdf(self):
+        from PySide6.QtWidgets import QFileDialog
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+        from reportlab.lib import colors
+        from reportlab.platypus import Table, TableStyle, SimpleDocTemplate, Paragraph, Spacer, Image
+        from reportlab.lib.styles import getSampleStyleSheet
+        import tempfile
+        if not hasattr(self, 'filtered_visits') or not self.filtered_visits:
+            QMessageBox.warning(self, "Export", "Bitte zuerst Filter setzen.")
+            return
+        fn, _ = QFileDialog.getSaveFileName(self, "PDF Export speichern", filter="PDF-Datei (*.pdf)")
+        if not fn:
+            return
+        # --- Statistische Auswertung vorbereiten ---
+        mode = self.get_status_mode()
+        summary = self.result.toPlainText()
+        # --- Tabelle der Termine ---
+        weekday_names = ["Mo","Di","Mi","Do","Fr","Sa","So"]
+        table_data = [["Datum", "Wochentag", "A anwesend (1=ja, 0=nein)", "B anwesend (1=ja, 0=nein)"]]
+        for v in self.filtered_visits:
+            d = v["day"]
+            wd = weekday_names[d.weekday()]
+            table_data.append([d.isoformat(), wd, int(v["present_child_a"]), int(v["present_child_b"])])
+        # --- Trend-Grafik erzeugen (wie im UI) ---
+        self.update_trend_chart([v for v in self.filtered_visits if (v['present_child_a'] if mode=='Kind A' else v['present_child_b'] if mode=='Kind B' else v['present_child_a'] and v['present_child_b'])])
+        # Hole das zuletzt erzeugte Chart-Bild
+        chart_pixmap = self.chart_label.pixmap()
+        chart_img_path = None
+        if chart_pixmap:
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                chart_pixmap.save(tmp.name)
+                chart_img_path = tmp.name
+        # --- PDF mit ReportLab erzeugen ---
+        doc = SimpleDocTemplate(fn, pagesize=letter)
+        styles = getSampleStyleSheet()
+        elements = []
+        elements.append(Paragraph("<b>KidsCompass Statistik-Export</b>", styles['Title']))
+        elements.append(Spacer(1, 12))
+        elements.append(Paragraph(f"Zeitraum: {self.date_from.date().toString()} bis {self.date_to.date().toString()}", styles['Normal']))
+        elements.append(Spacer(1, 12))
+        # Statistische Auswertung als Text
+        for line in summary.split('\n'):
+            elements.append(Paragraph(line, styles['Normal']))
+        elements.append(Spacer(1, 12))
+        # Trend-Grafik einfügen
+        if chart_img_path:
+            elements.append(Image(chart_img_path, width=400, height=150))
+            elements.append(Spacer(1, 12))
+        # Tabelle der Termine
+        t = Table(table_data, repeatRows=1)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.lightblue),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.black),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,0), 10),
+            ('BOTTOMPADDING', (0,0), (-1,0), 8),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ]))
+        elements.append(t)
+        doc.build(elements)
+        QMessageBox.information(self, "Export", f"PDF erfolgreich gespeichert: {fn}")
 
 class ExportWorker(QObject):
     finished = Signal(str)
@@ -425,6 +671,10 @@ class ExportWorker(QObject):
                 if y < 100:
                     c.showPage()
                     y = h - 50
+                    c.setFont('Helvetica-Bold', 12)
+                    c.drawString(50, y, "Datum      | Wochentag | A | B")
+                    y -= 20
+                    c.setFont('Helvetica', 10)
                 wd = weekdays[d.weekday()]
                 c.drawString(60, y, f"{d.isoformat()} ({wd}): {st}")
                 y -= 15
@@ -464,17 +714,27 @@ class BackupWorker(QObject):
         super().__init__()
         self.db = db
         self.fn = fn
+        self._stopped = False
+
+    def stop(self):
+        self._stopped = True
 
     def run(self):
+        if self._stopped:
+            return
+
         try:
             self.db.export_to_sql(self.fn)
-            self.finished.emit(self.fn)
+            if not self._stopped:
+                self.finished.emit(self.fn)
         except OSError as e:
             logging.error(f"BackupWorker OSError: {e}")
-            self.error.emit(f"Dateifehler: {e}")
+            if not self._stopped:
+                self.error.emit(f"Dateifehler: {e}")
         except Exception as e:
             logging.error(f"BackupWorker error: {e}")
-            self.error.emit(str(e))
+            if not self._stopped:
+                self.error.emit(str(e))
 
 class RestoreWorker(QObject):
     finished = Signal()
@@ -485,21 +745,34 @@ class RestoreWorker(QObject):
         self.db = db
         self.fn = fn
         self.parent = parent
+        self._stopped = False
+
+    def stop(self):
+        self._stopped = True
 
     def run(self):
+        if self._stopped:
+            return
+
         try:
             self.db.import_from_sql(self.fn)
+            if self._stopped:
+                return
+
             self.parent.visit_status = self.db.load_all_status()
-            self.parent.patterns     = self.db.load_patterns()
-            self.parent.overrides    = self.db.load_overrides()
+            self.parent.patterns = self.db.load_patterns()
+            self.parent.overrides = self.db.load_overrides()
             self.parent.refresh_calendar()
-            self.finished.emit()
-        except OSError as e:
-            logging.error(f"RestoreWorker OSError: {e}")
-            self.error.emit(f"Dateifehler: {e}")
+
+            if not self._stopped:
+                self.finished.emit()
+
+        except IOError as e:
+            if not self._stopped:
+                self.error.emit(f"Dateifehler: {e}")
         except Exception as e:
-            logging.error(f"RestoreWorker error: {e}")
-            self.error.emit(str(e))
+            if not self._stopped:
+                self.error.emit(str(e))
 
 class MainWindow(QMainWindow):
     def __init__(self, db=None):
@@ -553,7 +826,7 @@ class MainWindow(QMainWindow):
     def refresh_calendar(self):
         cal = self.tab2.calendar
         cal.setDateTextFormat(QDate(), QTextCharFormat())
-        today = date.today()
+        today = datetime.date.today()
 
         def apply_format(d, color):
             qd = QDate(d.year, d.month, d.day)
@@ -563,7 +836,7 @@ class MainWindow(QMainWindow):
 
         self._mutex.lock()
         try:
-            raw: List[date] = []
+            raw: List[datetime.date] = []
             for p in self.patterns:
                 start_y = p.start_date.year
                 last_y = p.end_date.year if p.end_date else today.year
