@@ -23,6 +23,9 @@ from kidscompass.calendar_logic import generate_standard_days, apply_overrides
 from kidscompass.data import Database
 from kidscompass.statistics import count_missing_by_weekday, summarize_visits, calculate_trends
 import matplotlib.pyplot as plt
+from PySide6.QtWidgets import QLabel
+from PySide6.QtGui import QPixmap
+import tempfile
 
 
 
@@ -279,23 +282,19 @@ class StatisticsTab(QWidget):
             self.wd_checks.append((i, cb))
         layout.addWidget(wd_group)
 
-        # — Status-Filter —
-        status_group = QGroupBox("Status-Filter")
+        # — Status-Filter als Dropdown —
+        status_group = QGroupBox("Statistik für ...")
         status_layout = QHBoxLayout(status_group)
-        self.cb_a_absent     = QCheckBox("A fehlt")
-        self.cb_b_absent     = QCheckBox("B fehlt")
-        self.cb_both_absent  = QCheckBox("beide fehlen")
-        self.cb_both_present = QCheckBox("beide da")
-        for cb in (self.cb_a_absent, self.cb_b_absent, self.cb_both_absent, self.cb_both_present):
-            status_layout.addWidget(cb)
+        self.status_combo = QComboBox()
+        self.status_combo.addItems(["Kind A", "Kind B", "Beide"])
+        status_layout.addWidget(QLabel("Auswertung für:"))
+        status_layout.addWidget(self.status_combo)
         layout.addWidget(status_group)
 
-        # — Button zum Berechnen —
+        # — Export-Buttons —
         btns = QHBoxLayout()
-        self.btn_calc = QPushButton("Statistik berechnen")
         self.btn_export_csv = QPushButton("CSV Export")
         self.btn_export_pdf = QPushButton("PDF Export")
-        btns.addWidget(self.btn_calc)
         btns.addWidget(self.btn_export_csv)
         btns.addWidget(self.btn_export_pdf)
         layout.addLayout(btns)
@@ -304,74 +303,125 @@ class StatisticsTab(QWidget):
         self.result = QTextEdit()
         self.result.setReadOnly(True)
         layout.addWidget(self.result)
+        # Trend-Chart
+        self.chart_label = QLabel()
+        self.chart_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.chart_label)
 
-        # Signal:
-        self.btn_calc.clicked.connect(self.on_calculate)
+        # Signals: Filteränderungen triggern Statistik
+        self.date_from.dateChanged.connect(self.on_any_filter_changed)
+        self.date_to.dateChanged.connect(self.on_any_filter_changed)
+        for _, cb in self.wd_checks:
+            cb.stateChanged.connect(self.on_any_filter_changed)
+        self.status_combo.currentIndexChanged.connect(self.on_any_filter_changed)
         self.btn_export_csv.clicked.connect(self.on_export_csv)
         self.btn_export_pdf.clicked.connect(self.on_export_pdf)
 
-    def get_status_filters(self) -> dict:
-        d = {
-            "both_present":   self.cb_both_present.isChecked(),
-            "both_absent":    self.cb_both_absent.isChecked(),
-            "a_absent":       self.cb_a_absent.isChecked(),
-            "b_absent":       self.cb_b_absent.isChecked(),
-        }
-        return d
+        # Initiale Berechnung
+        self.on_any_filter_changed()
 
-    def on_calculate(self):
+    def get_status_mode(self):
+        # Gibt zurück, was im Dropdown gewählt ist
+        return self.status_combo.currentText()
+
+    def on_any_filter_changed(self):
         sel_wds = [i for i, cb in self.wd_checks if cb.isChecked()]
         start_d = self.date_from.date().toPython()
         end_d   = self.date_to.date().toPython()
-        status_filters = self.get_status_filters()
+        mode = self.get_status_mode()
         db = self.parent.db
-        visits_list = db.query_visits(start_d, end_d, sel_wds, status_filters)
-        # Tabellarische Übersicht
-        lines = ["Datum      | Wochentag | Status"]
-        weekday_names = ["Mo","Di","Mi","Do","Fr","Sa","So"]
-        for v in visits_list:
-            d = v["day"]
-            wd = weekday_names[d.weekday()]
-            if v["present_child_a"] and v["present_child_b"]:
-                status = "beide da"
-            elif not v["present_child_a"] and not v["present_child_b"]:
-                status = "beide fehlen"
-            elif not v["present_child_a"]:
-                status = "A fehlt"
-            else:
-                status = "B fehlt"
-            lines.append(f"{d.isoformat()} | {wd}        | {status}")
-        # Wochen mit vollständigen Besuchen
+        visits_list = db.query_visits(start_d, end_d, sel_wds, {  # Filter wird im nächsten Schritt angepasst
+            "both_present": mode == "Beide",
+            "a_absent": False,
+            "b_absent": False,
+            "both_absent": False
+        })
+        # --- Neue Auswertung ---
         from collections import defaultdict
-        weekmap = defaultdict(list)
-        for v in visits_list:
-            if v["present_child_a"] and v["present_child_b"]:
-                year, week, _ = v["day"].isocalendar()
-                weekmap[(year, week)].append(v["day"])
-        full_weeks = [f"KW {w[1]} {w[0]}: {len(days)}x beide da" for w, days in weekmap.items()]
+        weekday_names = ["Mo","Di","Mi","Do","Fr","Sa","So"]
+        # Filter nach Modus
+        if mode == "Kind A":
+            relevant = [v for v in visits_list if v["present_child_a"]]
+            missed = [v for v in visits_list if not v["present_child_a"]]
+        elif mode == "Kind B":
+            relevant = [v for v in visits_list if v["present_child_b"]]
+            missed = [v for v in visits_list if not v["present_child_b"]]
+        else:  # Beide
+            relevant = [v for v in visits_list if v["present_child_a"] and v["present_child_b"]]
+            missed = [v for v in visits_list if not (v["present_child_a"] and v["present_child_b"])]
+        total = len(visits_list)
+        rel = len(relevant)
+        miss = len(missed)
+        pct_rel = round(rel/total*100,1) if total else 0.0
+        pct_miss = round(miss/total*100,1) if total else 0.0
         # Wochentagsauswertung
         weekday_count = defaultdict(int)
-        for v in visits_list:
-            if v["present_child_a"] and v["present_child_b"]:
-                weekday_count[v["day"].weekday()] += 1
-        weekday_stats = [f"{weekday_names[i]}: {weekday_count[i]}x beide da" for i in range(7)]
+        for v in relevant:
+            weekday_count[v["day"].weekday()] += 1
+        weekday_stats = [f"{weekday_names[i]}: {weekday_count[i]}x ({round(weekday_count[i]/total*100,1) if total else 0.0}%)" for i in range(7)]
+        # Entwicklung der letzten 1, 3, 6 Monate
+        today = datetime.date.today()
+        def count_in_period(months):
+            from dateutil.relativedelta import relativedelta
+            since = today - relativedelta(months=months)
+            return len([v for v in relevant if v["day"] >= since])
+        rel_1m = count_in_period(1)
+        rel_3m = count_in_period(3)
+        rel_6m = count_in_period(6)
+        # Entwicklung prozentual
+        def pct_change(now, prev):
+            return round((now-prev)/prev*100,1) if prev else 0.0
+        trend_1m = pct_change(rel_1m, rel_3m-rel_1m)
+        trend_3m = pct_change(rel_3m, rel_6m-rel_3m)
         # Zusammenfassung
         summary = (
-            f"Gefundene Termine: {len(visits_list)}\n"
-            f"Kind A Abwesenheiten: {sum(not v['present_child_a'] for v in visits_list)}\n"
-            f"Kind B Abwesenheiten: {sum(not v['present_child_b'] for v in visits_list)}\n"
+            f"Gefundene Termine: {total}\n"
+            f"{mode} anwesend: {rel} ({pct_rel}%)\n"
+            f"{mode} abwesend: {miss} ({pct_miss}%)\n"
+            f"\nWochentagsauswertung ({mode} anwesend):\n" + "\n".join(weekday_stats) +
+            f"\n\nEntwicklung Umgangsfrequenz:\nLetzter Monat: {rel_1m} ({trend_1m}% Veränderung)\nLetzte 3 Monate: {rel_3m} ({trend_3m}% Veränderung)\nLetzte 6 Monate: {rel_6m}"
         )
-        output = summary + "\nTabellarische Übersicht:\n" + "\n".join(lines)
-        output += "\n\nWochen mit vollständigen Besuchen (beide da):\n" + "\n".join(full_weeks)
-        output += "\n\nWochentagsauswertung (beide da):\n" + "\n".join(weekday_stats)
-        self.result.setPlainText(output)
+        self.result.setPlainText(summary)
         self.filtered_visits = visits_list  # Für Export
+        # --- Trend-Chart erzeugen ---
+        self.update_trend_chart(relevant)
+
+    def update_trend_chart(self, relevant):
+        if not relevant:
+            self.chart_label.clear()
+            return
+        # Gruppiere nach Monat
+        from collections import Counter
+        import calendar
+        months = [v['day'].replace(day=1) for v in relevant]
+        count_per_month = Counter(months)
+        if not count_per_month:
+            self.chart_label.clear()
+            return
+        # Sortiere nach Zeit
+        sorted_months = sorted(count_per_month.keys())
+        x = [m.strftime('%Y-%m') for m in sorted_months]
+        y = [count_per_month[m] for m in sorted_months]
+        # Plotten
+        fig, ax = plt.subplots(figsize=(5,2.5))
+        ax.plot(x, y, marker='o', color='#1976d2')
+        ax.set_title('Umgangsfrequenz pro Monat')
+        ax.set_xlabel('Monat')
+        ax.set_ylabel('Umgänge')
+        ax.grid(True, linestyle=':')
+        plt.xticks(rotation=30, ha='right')
+        fig.tight_layout()
+        # Temporäre Datei für das Bild
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+            fig.savefig(tmp.name, bbox_inches='tight')
+            plt.close(fig)
+            self.chart_label.setPixmap(QPixmap(tmp.name))
 
     def on_export_csv(self):
         import csv
         from PySide6.QtWidgets import QFileDialog
         if not hasattr(self, 'filtered_visits') or not self.filtered_visits:
-            QMessageBox.warning(self, "Export", "Bitte zuerst Statistik berechnen.")
+            QMessageBox.warning(self, "Export", "Bitte zuerst Filter setzen.")
             return
         fn, _ = QFileDialog.getSaveFileName(self, "CSV Export speichern", filter="CSV-Datei (*.csv)")
         if not fn:
@@ -391,7 +441,7 @@ class StatisticsTab(QWidget):
         from reportlab.lib.pagesizes import letter
         from reportlab.pdfgen import canvas
         if not hasattr(self, 'filtered_visits') or not self.filtered_visits:
-            QMessageBox.warning(self, "Export", "Bitte zuerst Statistik berechnen.")
+            QMessageBox.warning(self, "Export", "Bitte zuerst Filter setzen.")
             return
         fn, _ = QFileDialog.getSaveFileName(self, "PDF Export speichern", filter="PDF-Datei (*.pdf)")
         if not fn:
@@ -407,12 +457,13 @@ class StatisticsTab(QWidget):
         y -= 20
         c.drawString(50, y, f"Gefundene Termine: {len(self.filtered_visits)}")
         y -= 20
-        c.drawString(50, y, f"Kind A Abwesenheiten: {sum(not v['present_child_a'] for v in self.filtered_visits)}")
+        mode = self.get_status_mode()
+        c.drawString(50, y, f"{mode} anwesend: {sum(1 for v in self.filtered_visits if (v['present_child_a'] if mode=='Kind A' else v['present_child_b'] if mode=='Kind B' else v['present_child_a'] and v['present_child_b']))}")
         y -= 20
-        c.drawString(50, y, f"Kind B Abwesenheiten: {sum(not v['present_child_b'] for v in self.filtered_visits)}")
+        c.drawString(50, y, f"{mode} abwesend: {sum(1 for v in self.filtered_visits if not (v['present_child_a'] if mode=='Kind A' else v['present_child_b'] if mode=='Kind B' else v['present_child_a'] and v['present_child_b']))}")
         y -= 30
         c.setFont('Helvetica-Bold', 12)
-        c.drawString(50, y, "Datum      | Wochentag | Status")
+        c.drawString(50, y, "Datum      | Wochentag | A | B")
         y -= 20
         weekday_names = ["Mo","Di","Mi","Do","Fr","Sa","So"]
         for v in self.filtered_visits:
@@ -420,20 +471,12 @@ class StatisticsTab(QWidget):
                 c.showPage()
                 y = h - 40
                 c.setFont('Helvetica-Bold', 12)
-                c.drawString(50, y, "Datum      | Wochentag | Status")
+                c.drawString(50, y, "Datum      | Wochentag | A | B")
                 y -= 20
                 c.setFont('Helvetica', 10)
             d = v["day"]
             wd = weekday_names[d.weekday()]
-            if v["present_child_a"] and v["present_child_b"]:
-                status = "beide da"
-            elif not v["present_child_a"] and not v["present_child_b"]:
-                status = "beide fehlen"
-            elif not v["present_child_a"]:
-                status = "A fehlt"
-            else:
-                status = "B fehlt"
-            c.drawString(50, y, f"{d.isoformat()} | {wd}        | {status}")
+            c.drawString(50, y, f"{d.isoformat()} | {wd}        | {int(v['present_child_a'])} | {int(v['present_child_b'])}")
             y -= 15
         c.save()
         QMessageBox.information(self, "Export", f"PDF erfolgreich gespeichert: {fn}")
