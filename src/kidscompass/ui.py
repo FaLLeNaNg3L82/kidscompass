@@ -7,7 +7,7 @@ import logging
 import matplotlib
 matplotlib.use("Agg")
 
-from .models import VisitPattern, OverridePeriod, RemoveOverride, VisitStatus
+from kidscompass.models import VisitPattern, OverridePeriod, RemoveOverride, VisitStatus
 from kidscompass.charts import create_pie_chart
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
