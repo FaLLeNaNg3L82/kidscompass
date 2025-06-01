@@ -487,7 +487,7 @@ class StatisticsTab(QWidget):
             trend_lines = []
             for i, (start_w, end_w) in enumerate(windows):
                 att, total_days = attendance_in_window(start_w, end_w, key)
-                pct = round(att / total_days * 100, 1) if total_days else 0.0
+                pct = round(att / total_days / 100, 1) if total_days else 0.0
                 if i == 0:
                     change = 0.0
                 else:
@@ -513,57 +513,68 @@ class StatisticsTab(QWidget):
         if not self.filtered_visits:
             self.chart_label.clear()
             return
-        from collections import Counter, defaultdict
-        import calendar
-        # Berechne geplante Umgangstage pro Monat
-        all_months = set()
-        planned_per_month = defaultdict(int)
-        for v in self.filtered_visits:
-            m = v['day'].replace(day=1)
-            planned_per_month[m] += 1
-            all_months.add(m)
-        sorted_months = sorted(all_months)
-        # Berechne tatsächliche Anwesenheit pro Monat
+        from collections import defaultdict
+        import datetime
+
+        # Use the same rolling 4-week windows as in on_any_filter_changed
+        start_d = self.date_from.date().toPython()
+        end_d = self.date_to.date().toPython()
+        sel_wds = [i for i, cb in self.wd_checks if cb.isChecked()]
+        visit_status = self.parent.visit_status
+        planned = apply_overrides(
+            sum((generate_standard_days(p, y) for p in self.parent.patterns for y in range(start_d.year, end_d.year + 1)), []),
+            self.parent.overrides
+        )
+        planned = [d for d in planned if start_d <= d <= end_d]
+
+        def get_rolling_windows(start_date, end_date, window_days=28, step_days=7):
+            windows = []
+            current_start = start_date
+            while current_start + datetime.timedelta(days=window_days-1) <= end_date:
+                current_end = current_start + datetime.timedelta(days=window_days-1)
+                windows.append((current_start, current_end))
+                current_start += datetime.timedelta(days=step_days)
+            return windows
+
+        windows = get_rolling_windows(start_d, end_d)
+
+        def attendance_in_window(start, end, child_key):
+            planned_days = [d for d in planned if start <= d <= end and d.weekday() in sel_wds]
+            if not planned_days:
+                return 0, 0
+            attended = sum(1 for d in planned_days if getattr(visit_status.get(d, VisitStatus(d)), child_key))
+            return attended, len(planned_days)
+
+        x = []
+        y_a = []
+        y_b = []
+
+        for start_w, end_w in windows:
+            att_a, total_a = attendance_in_window(start_w, end_w, "present_child_a")
+            att_b, total_b = attendance_in_window(start_w, end_w, "present_child_b")
+            pct_a = round(att_a / total_a * 100, 1) if total_a else 0
+            pct_b = round(att_b / total_b * 100, 1) if total_b else 0
+            x.append(f"{start_w.strftime('%d.%m')} - {end_w.strftime('%d.%m')}")
+            y_a.append(pct_a)
+            y_b.append(pct_b)
+
+        fig, ax = plt.subplots(figsize=(6,3))
         if mode == 'Beide':
-            present_a = defaultdict(int)
-            present_b = defaultdict(int)
-            for v in self.filtered_visits:
-                m = v['day'].replace(day=1)
-                if v['present_child_a']:
-                    present_a[m] += 1
-                if v['present_child_b']:
-                    present_b[m] += 1
-            x = [m.strftime('%Y-%m') for m in sorted_months]
-            y_a = [round(present_a[m]/planned_per_month[m]*100,1) if planned_per_month[m] else 0 for m in sorted_months]
-            y_b = [round(present_b[m]/planned_per_month[m]*100,1) if planned_per_month[m] else 0 for m in sorted_months]
-            fig, ax = plt.subplots(figsize=(5,2.5))
             ax.plot(x, y_a, marker='o', color='#1976d2', label='Kind A')
             ax.plot(x, y_b, marker='o', color='#d32f2f', label='Kind B')
-            ax.set_title('Anwesenheit pro Monat (%)')
-            ax.set_xlabel('Monat')
-            ax.set_ylabel('Anwesenheit (%)')
-            ax.set_ylim(0, 105)
             ax.legend()
-            ax.grid(True, linestyle=':')
-            plt.xticks(rotation=30, ha='right')
-            fig.tight_layout()
         else:
-            present = defaultdict(int)
-            for v in self.filtered_visits:
-                m = v['day'].replace(day=1)
-                if (v['present_child_a'] if mode=='Kind A' else v['present_child_b']):
-                    present[m] += 1
-            x = [m.strftime('%Y-%m') for m in sorted_months]
-            y = [round(present[m]/planned_per_month[m]*100,1) if planned_per_month[m] else 0 for m in sorted_months]
-            fig, ax = plt.subplots(figsize=(5,2.5))
+            y = y_a if mode == 'Kind A' else y_b
             ax.plot(x, y, marker='o', color='#1976d2')
-            ax.set_title(f'Anwesenheit {mode} pro Monat (%)')
-            ax.set_xlabel('Monat')
-            ax.set_ylabel('Anwesenheit (%)')
-            ax.set_ylim(0, 105)
-            ax.grid(True, linestyle=':')
-            plt.xticks(rotation=30, ha='right')
-            fig.tight_layout()
+
+        ax.set_title(f'Anwesenheit {mode} (rollierende 4-Wochen-Fenster)')
+        ax.set_xlabel('Zeitraum')
+        ax.set_ylabel('Anwesenheit (%)')
+        ax.set_ylim(0, 105)
+        ax.grid(True, linestyle=':')
+        plt.xticks(rotation=30, ha='right')
+        fig.tight_layout()
+
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
             fig.savefig(tmp.name, bbox_inches='tight')
             plt.close(fig)
