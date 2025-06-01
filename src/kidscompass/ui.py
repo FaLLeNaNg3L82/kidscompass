@@ -282,6 +282,7 @@ class StatisticsTab(QWidget):
         self.wd_checks = []
         for i, name in enumerate(["Mo","Di","Mi","Do","Fr","Sa","So"]):
             cb = QCheckBox(name)
+            cb.setChecked(True)  # Default: all checked
             wd_layout.addWidget(cb)
             self.wd_checks.append((i, cb))
         layout.addWidget(wd_group)
@@ -329,186 +330,272 @@ class StatisticsTab(QWidget):
         return self.status_combo.currentText()
 
     def on_any_filter_changed(self):
-        sel_wds = [i for i, cb in self.wd_checks if cb.isChecked()]
+        # --- Geplante Umgangstage wie im Status-Tab berechnen ---
+        from kidscompass.calendar_logic import generate_standard_days, apply_overrides
+        patterns = self.parent.patterns
+        overrides = self.parent.overrides
         start_d = self.date_from.date().toPython()
         end_d   = self.date_to.date().toPython()
+        # KORREKTUR: Pattern-Tage nur für Schnittmenge Pattern-Zeitraum und Statistik-Zeitraum generieren
+        all_planned = []
+        for p in patterns:
+            pattern_start = max(p.start_date, start_d)
+            pattern_end = min(p.end_date or end_d, end_d)
+            if pattern_start > pattern_end:
+                continue
+            for y in range(pattern_start.year, pattern_end.year + 1):
+                days = generate_standard_days(p, y)
+                # Nur Tage im Schnittmengen-Zeitraum behalten
+                days = [d for d in days if pattern_start <= d <= pattern_end]
+                all_planned.extend(days)
+        all_planned = apply_overrides(all_planned, overrides)
+        planned = [d for d in all_planned if start_d <= d <= end_d]
+        # --- Tatsächlich dokumentierte Besuche ---
+        sel_wds = [i for i, cb in self.wd_checks if cb.isChecked()]
         mode = self.get_status_mode()
         db = self.parent.db
         visits_list = db.query_visits(start_d, end_d, sel_wds, {
-            "both_present": False,  # Kein Vorfilter mehr, wir werten alles aus
+            "both_present": False,
             "a_absent": False,
             "b_absent": False,
             "both_absent": False
         })
         from collections import defaultdict
         weekday_names = ["Mo","Di","Mi","Do","Fr","Sa","So"]
-        total = len(visits_list)
+        total = len(planned)
+        if total == 0:
+            self.result.setPlainText("Keine geplanten Umgänge für die gewählten Filter gefunden.\n\nBitte prüfen Sie Zeitraum und Muster.")
+            self.filtered_visits = []
+            self.chart_label.clear()
+            return
+        visit_status = self.parent.visit_status
+
         if mode == "Beide":
-            # Für beide Kinder getrennt auswerten
-            rel_a = sum(1 for v in visits_list if v["present_child_a"])
-            rel_b = sum(1 for v in visits_list if v["present_child_b"])
-            miss_a = total - rel_a
-            miss_b = total - rel_b
+            rel_a = sum(1 for d in planned if d.weekday() in sel_wds and visit_status.get(d, VisitStatus(d)).present_child_a)
+            rel_b = sum(1 for d in planned if d.weekday() in sel_wds and visit_status.get(d, VisitStatus(d)).present_child_b)
+            miss_a = sum(1 for d in planned if d.weekday() in sel_wds and not visit_status.get(d, VisitStatus(d)).present_child_a)
+            miss_b = sum(1 for d in planned if d.weekday() in sel_wds and not visit_status.get(d, VisitStatus(d)).present_child_b)
+            total = sum(1 for d in planned if d.weekday() in sel_wds)
             pct_rel_a = round(rel_a/total*100,1) if total else 0.0
             pct_rel_b = round(rel_b/total*100,1) if total else 0.0
             pct_miss_a = round(miss_a/total*100,1) if total else 0.0
             pct_miss_b = round(miss_b/total*100,1) if total else 0.0
-            # Wochentagsauswertung
+
+            # Wochentagsauswertung: absolute und prozentuale Anwesenheit pro Wochentag (nur gefilterte Wochentage)
             weekday_count_a = defaultdict(int)
             weekday_count_b = defaultdict(int)
-            for v in visits_list:
-                if v["present_child_a"]:
-                    weekday_count_a[v["day"].weekday()] += 1
-                if v["present_child_b"]:
-                    weekday_count_b[v["day"].weekday()] += 1
+            weekday_planned_count = defaultdict(int)
+            for d in planned:
+                wd = d.weekday()
+                if wd in sel_wds:
+                    weekday_planned_count[wd] += 1
+                    vs = visit_status.get(d, VisitStatus(d))
+                    if vs.present_child_a:
+                        weekday_count_a[wd] += 1
+                    if vs.present_child_b:
+                        weekday_count_b[wd] += 1
+
             weekday_stats = [
-                f"{weekday_names[i]}: A {weekday_count_a[i]}x ({round(weekday_count_a[i]/total*100,1) if total else 0.0}%), "
-                f"B {weekday_count_b[i]}x ({round(weekday_count_b[i]/total*100,1) if total else 0.0}%)"
-                for i in range(7)
+                f"{weekday_names[i]}: A {weekday_count_a[i]}/{weekday_planned_count[i]} ({round(weekday_count_a[i]/weekday_planned_count[i]*100,1) if weekday_planned_count[i] else 0.0}%), "
+                f"B {weekday_count_b[i]}/{weekday_planned_count[i]} ({round(weekday_count_b[i]/weekday_planned_count[i]*100,1) if weekday_planned_count[i] else 0.0}%)"
+                for i in range(7) if i in sel_wds
             ]
-            # Entwicklung der letzten 1, 3, 6 Monate
+
+            # Entwicklung Umgangsfrequenz: Prozent Anwesenheit letzte 12 Wochen vs Gesamtzeitraum (ohne rollierende Fenster)
             today = datetime.date.today()
-            def count_in_period(months, key):
-                from dateutil.relativedelta import relativedelta
-                since = today - relativedelta(months=months)
-                return sum(1 for v in visits_list if v["day"] >= since and v[key])
-            rel_1m_a = count_in_period(1, "present_child_a")
-            rel_3m_a = count_in_period(3, "present_child_a")
-            rel_6m_a = count_in_period(6, "present_child_a")
-            rel_1m_b = count_in_period(1, "present_child_b")
-            rel_3m_b = count_in_period(3, "present_child_b")
-            rel_6m_b = count_in_period(6, "present_child_b")
-            def pct_change(now, prev):
-                return round((now-prev)/prev*100,1) if prev else 0.0
-            trend_1m_a = pct_change(rel_1m_a, rel_3m_a-rel_1m_a)
-            trend_3m_a = pct_change(rel_3m_a, rel_6m_a-rel_3m_a)
-            trend_1m_b = pct_change(rel_1m_b, rel_3m_b-rel_1m_b)
-            trend_3m_b = pct_change(rel_3m_b, rel_6m_b-rel_3m_b)
+            last_12_weeks_start = today - datetime.timedelta(weeks=12)
+
+            def attendance_percentage(start, end, child_key):
+                planned_days = [d for d in planned if start <= d <= end and d.weekday() in sel_wds]
+                if not planned_days:
+                    return 0.0
+                attended = sum(1 for d in planned_days if getattr(visit_status.get(d, VisitStatus(d)), child_key))
+                return attended / len(planned_days) * 100
+
+            total_pct_a = attendance_percentage(start_d, end_d, "present_child_a")
+            last_12_pct_a = attendance_percentage(last_12_weeks_start, end_d, "present_child_a")
+            total_pct_b = attendance_percentage(start_d, end_d, "present_child_b")
+            last_12_pct_b = attendance_percentage(last_12_weeks_start, end_d, "present_child_b")
+
+            change_a = round(last_12_pct_a - total_pct_a, 1)
+            change_b = round(last_12_pct_b - total_pct_b, 1)
+
+            trend_summary = (
+                f"Kind A Gesamt: {total_pct_a:.1f}%\n"
+                f"Kind A letzte 12 Wochen: {last_12_pct_a:.1f}%\n"
+                f"Veränderung: {change_a:+.1f}%\n"
+                f"Kind B Gesamt: {total_pct_b:.1f}%\n"
+                f"Kind B letzte 12 Wochen: {last_12_pct_b:.1f}%\n"
+                f"Veränderung: {change_b:+.1f}%"
+            )
+
             summary = (
-                f"Gefundene Termine: {total}\n"
+                f"Geplante Umgänge: {total}\n"
                 f"Kind A anwesend: {rel_a} ({pct_rel_a}%)\nKind A abwesend: {miss_a} ({pct_miss_a}%)\n"
                 f"Kind B anwesend: {rel_b} ({pct_rel_b}%)\nKind B abwesend: {miss_b} ({pct_miss_b}%)\n"
                 f"\nWochentagsauswertung:\n" + "\n".join(weekday_stats) +
-                f"\n\nEntwicklung Umgangsfrequenz:\n"
-                f"Kind A letzter Monat: {rel_1m_a} ({trend_1m_a}% Veränderung)\nKind A letzte 3 Monate: {rel_3m_a} ({trend_3m_a}% Veränderung)\nKind A letzte 6 Monate: {rel_6m_a}\n"
-                f"Kind B letzter Monat: {rel_1m_b} ({trend_1m_b}% Veränderung)\nKind B letzte 3 Monate: {rel_3m_b} ({trend_3m_b}% Veränderung)\nKind B letzte 6 Monate: {rel_6m_b}"
+                f"\n\nEntwicklung Umgangsfrequenz (letzte 12 Wochen vs Gesamt):\n" + trend_summary
             )
+
             self.result.setPlainText(summary)
-            self.filtered_visits = visits_list
-            self.update_trend_chart(visits_list)  # alle visits für beide Linien
+            self.filtered_visits = [v for v in visits_list if v["day"] in planned and v["day"].weekday() in sel_wds]
+            self.update_trend_chart(self.filtered_visits)
+
         else:
-            # Einzelkind-Modus wie gehabt
-            relevant = [v for v in visits_list if v["present_child_a"]] if mode=="Kind A" else [v for v in visits_list if v["present_child_b"]]
-            missed = [v for v in visits_list if not v["present_child_a"]] if mode=="Kind A" else [v for v in visits_list if not v["present_child_b"]]
+            # Einzelkind-Modus wie gehabt, aber auf Basis planned/visit_status und gefilterte Wochentage
+            key = "present_child_a" if mode=="Kind A" else "present_child_b"
+            relevant = [d for d in planned if d.weekday() in sel_wds and getattr(visit_status.get(d, VisitStatus(d)), key)]
+            missed = [d for d in planned if d.weekday() in sel_wds and not getattr(visit_status.get(d, VisitStatus(d)), key)]
             rel = len(relevant)
             miss = len(missed)
+            total = rel + miss
             pct_rel = round(rel/total*100,1) if total else 0.0
             pct_miss = round(miss/total*100,1) if total else 0.0
             weekday_count = defaultdict(int)
-            for v in relevant:
-                weekday_count[v["day"].weekday()] += 1
-            weekday_stats = [f"{weekday_names[i]}: {weekday_count[i]}x ({round(weekday_count[i]/total*100,1) if total else 0.0}%)" for i in range(7)]
+            weekday_planned_count = defaultdict(int)
+            for d in planned:
+                wd = d.weekday()
+                if wd in sel_wds:
+                    weekday_planned_count[wd] += 1
+            for d in relevant:
+                wd = d.weekday()
+                if wd in sel_wds:
+                    weekday_count[wd] += 1
+            weekday_stats = [
+                f"{weekday_names[i]}: {weekday_count[i]}/{weekday_planned_count[i]} ({round(weekday_count[i]/weekday_planned_count[i]*100,1) if weekday_planned_count[i] else 0.0}%)"
+                for i in range(7) if i in sel_wds
+            ]
+
+            # Entwicklung Umgangsfrequenz: Prozent Anwesenheit letzte 12 Wochen vs Gesamtzeitraum (für alle Modi)
             today = datetime.date.today()
-            def count_in_period(months):
-                from dateutil.relativedelta import relativedelta
-                since = today - relativedelta(months=months)
-                return len([v for v in relevant if v["day"] >= since])
-            rel_1m = count_in_period(1)
-            rel_3m = count_in_period(3)
-            rel_6m = count_in_period(6)
-            def pct_change(now, prev):
-                return round((now-prev)/prev*100,1) if prev else 0.0
-            trend_1m = pct_change(rel_1m, rel_3m-rel_1m)
-            trend_3m = pct_change(rel_3m, rel_6m-rel_3m)
+            last_12_weeks_start = today - datetime.timedelta(weeks=12)
+
+            def attendance_percentage(start, end, child_key):
+                planned_days = [d for d in planned if start <= d <= end and d.weekday() in sel_wds]
+                if not planned_days:
+                    return 0.0
+                attended = sum(1 for d in planned_days if getattr(visit_status.get(d, VisitStatus(d)), child_key))
+                return attended / len(planned_days) * 100
+
+            total_pct = attendance_percentage(start_d, end_d, key)
+            last_12_pct = attendance_percentage(last_12_weeks_start, end_d, key)
+
+            change = round(last_12_pct - total_pct, 1)
+
+            trend_summary = (
+                f"Gesamt: {total_pct:.1f}%\n"
+                f"Letzte 12 Wochen: {last_12_pct:.1f}%\n"
+                f"Veränderung: {change:+.1f}%"
+            )
+
             summary = (
-                f"Gefundene Termine: {total}\n"
+                f"Geplante Umgänge: {total}\n"
                 f"{mode} anwesend: {rel} ({pct_rel}%)\n"
                 f"{mode} abwesend: {miss} ({pct_miss}%)\n"
                 f"\nWochentagsauswertung ({mode} anwesend):\n" + "\n".join(weekday_stats) +
-                f"\n\nEntwicklung Umgangsfrequenz:\nLetzter Monat: {rel_1m} ({trend_1m}% Veränderung)\nLetzte 3 Monate: {rel_3m} ({trend_3m}% Veränderung)\nLetzte 6 Monate: {rel_6m}"
+                f"\n\nEntwicklung Umgangsfrequenz (letzte 12 Wochen vs Gesamt):\n" + trend_summary
             )
-            self.result.setPlainText(summary)
-            self.filtered_visits = visits_list
-            self.update_trend_chart(relevant)
+
+        self.result.setPlainText(summary)
+        self.filtered_visits = [v for v in visits_list if v["day"] in planned and v["day"].weekday() in sel_wds]
+        self.update_trend_chart(self.filtered_visits)
 
     def update_trend_chart(self, relevant):
         mode = self.get_status_mode()
-        if not self.filtered_visits:
+        if not hasattr(self, 'filtered_visits') or not self.filtered_visits:
             self.chart_label.clear()
             return
-        from collections import Counter, defaultdict
-        import calendar
-        # Berechne geplante Umgangstage pro Monat
-        all_months = set()
-        planned_per_month = defaultdict(int)
-        for v in self.filtered_visits:
-            m = v['day'].replace(day=1)
-            planned_per_month[m] += 1
-            all_months.add(m)
-        sorted_months = sorted(all_months)
-        # Berechne tatsächliche Anwesenheit pro Monat
+        from collections import defaultdict
+        import matplotlib.pyplot as plt
+        import tempfile
+        import datetime
+        # 4-Wochen-Inkremente
+        start_d = self.date_from.date().toPython()
+        end_d = self.date_to.date().toPython()
+        sel_wds = [i for i, cb in self.wd_checks if cb.isChecked()]
+        visit_status = self.parent.visit_status
+        from kidscompass.calendar_logic import generate_standard_days, apply_overrides
+        planned = apply_overrides(
+            sum((generate_standard_days(p, y) for p in self.parent.patterns for y in range(start_d.year, end_d.year + 1)), []),
+            self.parent.overrides
+        )
+        planned = [d for d in planned if start_d <= d <= end_d]
+
+        def get_4week_increments(start_date, end_date, window_days=28):
+            increments = []
+            current_start = start_date
+            while current_start <= end_date:
+                current_end = current_start + datetime.timedelta(days=window_days-1)
+                if current_end > end_date:
+                    current_end = end_date
+                increments.append((current_start, current_end))
+                current_start = current_end + datetime.timedelta(days=1)
+            return increments
+
+        increments = get_4week_increments(start_d, end_d)
+
+        def attendance_in_period(start, end, child_key):
+            planned_days = [d for d in planned if start <= d <= end and d.weekday() in sel_wds]
+            if not planned_days:
+                return 0, 0
+            attended = sum(1 for d in planned_days if getattr(visit_status.get(d, VisitStatus(d)), child_key))
+            return attended, len(planned_days)
+
+        x = []
+        y_a = []
+        y_b = []
+
+        for start_w, end_w in increments:
+            att_a, total_a = attendance_in_period(start_w, end_w, "present_child_a")
+            att_b, total_b = attendance_in_period(start_w, end_w, "present_child_b")
+            pct_a = round(att_a / total_a * 100, 1) if total_a else 0
+            pct_b = round(att_b / total_b * 100, 1) if total_b else 0
+            x.append(f"{start_w.strftime('%d.%m')} - {end_w.strftime('%d.%m')}")
+            y_a.append(pct_a)
+            y_b.append(pct_b)
+
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(6,3))
         if mode == 'Beide':
-            present_a = defaultdict(int)
-            present_b = defaultdict(int)
-            for v in self.filtered_visits:
-                m = v['day'].replace(day=1)
-                if v['present_child_a']:
-                    present_a[m] += 1
-                if v['present_child_b']:
-                    present_b[m] += 1
-            x = [m.strftime('%Y-%m') for m in sorted_months]
-            y_a = [round(present_a[m]/planned_per_month[m]*100,1) if planned_per_month[m] else 0 for m in sorted_months]
-            y_b = [round(present_b[m]/planned_per_month[m]*100,1) if planned_per_month[m] else 0 for m in sorted_months]
-            fig, ax = plt.subplots(figsize=(5,2.5))
             ax.plot(x, y_a, marker='o', color='#1976d2', label='Kind A')
             ax.plot(x, y_b, marker='o', color='#d32f2f', label='Kind B')
-            ax.set_title('Anwesenheit pro Monat (%)')
-            ax.set_xlabel('Monat')
-            ax.set_ylabel('Anwesenheit (%)')
-            ax.set_ylim(0, 105)
             ax.legend()
-            ax.grid(True, linestyle=':')
-            plt.xticks(rotation=30, ha='right')
-            fig.tight_layout()
         else:
-            present = defaultdict(int)
-            for v in self.filtered_visits:
-                m = v['day'].replace(day=1)
-                if (v['present_child_a'] if mode=='Kind A' else v['present_child_b']):
-                    present[m] += 1
-            x = [m.strftime('%Y-%m') for m in sorted_months]
-            y = [round(present[m]/planned_per_month[m]*100,1) if planned_per_month[m] else 0 for m in sorted_months]
-            fig, ax = plt.subplots(figsize=(5,2.5))
+            y = y_a if mode == 'Kind A' else y_b
             ax.plot(x, y, marker='o', color='#1976d2')
-            ax.set_title(f'Anwesenheit {mode} pro Monat (%)')
-            ax.set_xlabel('Monat')
-            ax.set_ylabel('Anwesenheit (%)')
-            ax.set_ylim(0, 105)
-            ax.grid(True, linestyle=':')
-            plt.xticks(rotation=30, ha='right')
-            fig.tight_layout()
+        ax.set_title(f'Anwesenheit {mode} (4-Wochen-Inkremente)')
+        ax.set_xlabel('Zeitraum')
+        ax.set_ylabel('Anwesenheit (%)')
+        ax.set_ylim(0, 105)
+        ax.grid(True, linestyle=':')
+        plt.xticks(rotation=30, ha='right')
+        fig.tight_layout()
+        import tempfile
+        from PySide6.QtGui import QPixmap
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
             fig.savefig(tmp.name, bbox_inches='tight')
             plt.close(fig)
             self.chart_label.setPixmap(QPixmap(tmp.name))
 
     def on_export_csv(self):
-        import csv
         from PySide6.QtWidgets import QFileDialog
+        import csv
         if not hasattr(self, 'filtered_visits') or not self.filtered_visits:
             QMessageBox.warning(self, "Export", "Bitte zuerst Filter setzen.")
             return
         fn, _ = QFileDialog.getSaveFileName(self, "CSV Export speichern", filter="CSV-Datei (*.csv)")
         if not fn:
             return
+        weekday_names = ["Mo","Di","Mi","Do","Fr","Sa","So"]
         with open(fn, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(["Datum", "Wochentag", "A anwesend", "B anwesend"])
-            weekday_names = ["Mo","Di","Mi","Do","Fr","Sa","So"]
             for v in self.filtered_visits:
                 d = v["day"]
                 wd = weekday_names[d.weekday()]
-                writer.writerow([d.isoformat(), wd, v["present_child_a"], v["present_child_b"]])
+                writer.writerow([d.isoformat(), wd, int(v["present_child_a"]), int(v["present_child_b"])])
         QMessageBox.information(self, "Export", f"CSV erfolgreich gespeichert: {fn}")
 
     def on_export_pdf(self):
@@ -536,8 +623,7 @@ class StatisticsTab(QWidget):
             wd = weekday_names[d.weekday()]
             table_data.append([d.isoformat(), wd, int(v["present_child_a"]), int(v["present_child_b"])])
         # --- Trend-Grafik erzeugen (wie im UI) ---
-        self.update_trend_chart([v for v in self.filtered_visits if (v['present_child_a'] if mode=='Kind A' else v['present_child_b'] if mode=='Kind B' else v['present_child_a'] and v['present_child_b'])])
-        # Hole das zuletzt erzeugte Chart-Bild
+        self.update_trend_chart(self.filtered_visits)
         chart_pixmap = self.chart_label.pixmap()
         chart_img_path = None
         if chart_pixmap:
@@ -657,9 +743,14 @@ class ExportWorker(QObject):
             elements.append(Spacer(1, 12))
             elements.append(Paragraph(f"Zeitraum: {self.df.isoformat()} bis {self.dt.isoformat()}", styles['Normal']))
             elements.append(Spacer(1, 12))
-            elements.append(Paragraph(f"Geplante Umgänge: {stats['total']}", styles['Normal']))
-            elements.append(Paragraph(f"Abweichungstage: {len(deviations)}", styles['Normal']))
+            # --- PDF: Doppelte Zeile Abweichungstage entfernen und Diagramme/Tabellen nur erzeugen, wenn es geplante Umgänge gibt ---
             total = stats['total']
+            if total == 0:
+                elements.append(Paragraph("Keine geplanten Umgänge im gewählten Zeitraum.", styles['Normal']))
+                doc.build(elements)
+                self.finished.emit('PDF erstellt')
+                return
+            elements.append(Paragraph(f"Geplante Umgänge: {total}", styles['Normal']))
             dev = len(deviations)
             pct_dev = round(dev / total * 100, 1) if total else 0.0
             miss_a = stats['missed_a']
@@ -688,7 +779,7 @@ class ExportWorker(QObject):
             ]))
             elements.append(t)
             elements.append(Spacer(1, 24))
-            # Kuchendiagramme als Images oben platzieren
+            # Kuchendiagramme als Images oben platzieren, nur wenn total > 0
             elements.append(Paragraph("<b>Kuchendiagramme</b>", styles['Heading2']))
             elements.append(Spacer(1, 18))
             # Zeile mit Kind A und Kind B, größere Bilder und größere Labels
