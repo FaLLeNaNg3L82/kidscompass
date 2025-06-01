@@ -360,9 +360,8 @@ class StatisticsTab(QWidget):
             self.filtered_visits = []
             self.chart_label.clear()
             return
-        # --- Mapping Status zu geplanten Tagen ---
         visit_status = self.parent.visit_status
-        # --- Statistische Auswertung wie bisher, aber auf Basis planned/visit_status ---
+
         if mode == "Beide":
             rel_a = sum(1 for d in planned if visit_status.get(d, VisitStatus(d)).present_child_a)
             rel_b = sum(1 for d in planned if visit_status.get(d, VisitStatus(d)).present_child_b)
@@ -372,50 +371,77 @@ class StatisticsTab(QWidget):
             pct_rel_b = round(rel_b/total*100,1) if total else 0.0
             pct_miss_a = round(miss_a/total*100,1) if total else 0.0
             pct_miss_b = round(miss_b/total*100,1) if total else 0.0
-            # Wochentagsauswertung
+
+            # Wochentagsauswertung: absolute und prozentuale Anwesenheit pro Wochentag
             weekday_count_a = defaultdict(int)
             weekday_count_b = defaultdict(int)
+            weekday_planned_count = defaultdict(int)
             for d in planned:
+                weekday_planned_count[d.weekday()] += 1
                 vs = visit_status.get(d, VisitStatus(d))
                 if vs.present_child_a:
                     weekday_count_a[d.weekday()] += 1
                 if vs.present_child_b:
                     weekday_count_b[d.weekday()] += 1
+
             weekday_stats = [
-                f"{weekday_names[i]}: A anwesend {weekday_count_a[i]}x ({round(weekday_count_a[i]/total*100,1) if total else 0.0}%), "
-                f"B anwesend {weekday_count_b[i]}x ({round(weekday_count_b[i]/total*100,1) if total else 0.0}%)"
+                f"{weekday_names[i]}: A {weekday_count_a[i]}/{weekday_planned_count[i]} ({round(weekday_count_a[i]/weekday_planned_count[i]*100,1) if weekday_planned_count[i] else 0.0}%), "
+                f"B {weekday_count_b[i]}/{weekday_planned_count[i]} ({round(weekday_count_b[i]/weekday_planned_count[i]*100,1) if weekday_planned_count[i] else 0.0}%)"
                 for i in range(7)
             ]
-            # Entwicklung der letzten 4, 12, 24 Wochen (28, 84, 168 Tage)
+
+            # Rollierende 4-Wochen-Fenster mit wöchentlicher Schrittweite für Trend
+            import math
             today = datetime.date.today()
-            def count_in_period(days, key):
-                since = today - datetime.timedelta(days=days)
-                return sum(1 for d in planned if d >= since and getattr(visit_status.get(d, VisitStatus(d)), key))
-            rel_1m_a = count_in_period(28, "present_child_a")
-            rel_3m_a = count_in_period(84, "present_child_a")
-            rel_6m_a = count_in_period(168, "present_child_a")
-            rel_1m_b = count_in_period(28, "present_child_b")
-            rel_3m_b = count_in_period(84, "present_child_b")
-            rel_6m_b = count_in_period(168, "present_child_b")
-            def pct_change(now, prev):
-                return round((now-prev)/prev*100,1) if prev else 0.0
-            trend_1m_a = pct_change(rel_1m_a, rel_3m_a-rel_1m_a)
-            trend_3m_a = pct_change(rel_3m_a, rel_6m_a-rel_3m_a)
-            trend_1m_b = pct_change(rel_1m_b, rel_3m_b-rel_1m_b)
-            trend_3m_b = pct_change(rel_3m_b, rel_6m_b-rel_3m_b)
+
+            def get_rolling_windows(start_date, end_date, window_days=28, step_days=7):
+                windows = []
+                current_start = start_date
+                while current_start + datetime.timedelta(days=window_days-1) <= end_date:
+                    current_end = current_start + datetime.timedelta(days=window_days-1)
+                    windows.append((current_start, current_end))
+                    current_start += datetime.timedelta(days=step_days)
+                return windows
+
+            windows = get_rolling_windows(start_d, end_d)
+
+            def attendance_in_window(start, end, child_key):
+                planned_days = [d for d in planned if start <= d <= end and d.weekday() in sel_wds]
+                if not planned_days:
+                    return 0, 0
+                attended = sum(1 for d in planned_days if getattr(visit_status.get(d, VisitStatus(d)), child_key))
+                return attended, len(planned_days)
+
+            trend_lines = []
+            for i, (start_w, end_w) in enumerate(windows):
+                att_a, total_a = attendance_in_window(start_w, end_w, "present_child_a")
+                att_b, total_b = attendance_in_window(start_w, end_w, "present_child_b")
+                pct_a = round(att_a / total_a * 100, 1) if total_a else 0.0
+                pct_b = round(att_b / total_b * 100, 1) if total_b else 0.0
+                if i == 0:
+                    change_a = 0.0
+                    change_b = 0.0
+                else:
+                    prev_att_a, prev_total_a = attendance_in_window(*windows[i-1], "present_child_a")
+                    prev_att_b, prev_total_b = attendance_in_window(*windows[i-1], "present_child_b")
+                    prev_pct_a = round(prev_att_a / prev_total_a * 100, 1) if prev_total_a else 0.0
+                    prev_pct_b = round(prev_att_b / prev_total_b * 100, 1) if prev_total_b else 0.0
+                    change_a = round(pct_a - prev_pct_a, 1)
+                    change_b = round(pct_b - prev_pct_b, 1)
+                trend_lines.append(f"{start_w.strftime('%d.%m.%Y')} - {end_w.strftime('%d.%m.%Y')}: Kind A {att_a}/{total_a} ({pct_a}%, {change_a:+}%), Kind B {att_b}/{total_b} ({pct_b}%, {change_b:+}%)")
+
             summary = (
                 f"Geplante Umgänge: {total}\n"
                 f"Kind A anwesend: {rel_a} ({pct_rel_a}%)\nKind A abwesend: {miss_a} ({pct_miss_a}%)\n"
                 f"Kind B anwesend: {rel_b} ({pct_rel_b}%)\nKind B abwesend: {miss_b} ({pct_miss_b}%)\n"
                 f"\nWochentagsauswertung:\n" + "\n".join(weekday_stats) +
-                f"\n\nEntwicklung Umgangsfrequenz (letzte 4/12/24 Wochen):\n"
-                f"Kind A letzte 4 Wochen: {rel_1m_a} ({trend_1m_a}% Veränderung)\nKind A letzte 12 Wochen: {rel_3m_a} ({trend_3m_a}% Veränderung)\nKind A letzte 24 Wochen: {rel_6m_a}\n"
-                f"Kind B letzte 4 Wochen: {rel_1m_b} ({trend_1m_b}% Veränderung)\nKind B letzte 12 Wochen: {rel_3m_b} ({trend_3m_b}% Veränderung)\nKind B letzte 24 Wochen: {rel_6m_b}"
+                f"\n\nEntwicklung Umgangsfrequenz (rollierende 4-Wochen-Fenster):\n" + "\n".join(trend_lines)
             )
+
             self.result.setPlainText(summary)
-            # Für Export und Chart: visits_list = alle dokumentierten Besuche im Zeitraum
             self.filtered_visits = [v for v in visits_list if v["day"] in planned]
             self.update_trend_chart(self.filtered_visits)
+
         else:
             # Einzelkind-Modus wie gehabt, aber auf Basis planned/visit_status
             key = "present_child_a" if mode=="Kind A" else "present_child_b"
@@ -426,27 +452,58 @@ class StatisticsTab(QWidget):
             pct_rel = round(rel/total*100,1) if total else 0.0
             pct_miss = round(miss/total*100,1) if total else 0.0
             weekday_count = defaultdict(int)
+            weekday_planned_count = defaultdict(int)
+            for d in planned:
+                weekday_planned_count[d.weekday()] += 1
             for d in relevant:
                 weekday_count[d.weekday()] += 1
-            weekday_stats = [f"{weekday_names[i]}: anwesend {weekday_count[i]}x ({round(weekday_count[i]/total*100,1) if total else 0.0}%)" for i in range(7)]
+            weekday_stats = [
+                f"{weekday_names[i]}: {weekday_count[i]}/{weekday_planned_count[i]} ({round(weekday_count[i]/weekday_planned_count[i]*100,1) if weekday_planned_count[i] else 0.0}%)"
+                for i in range(7)
+            ]
+
+            # Rollierende 4-Wochen-Fenster mit wöchentlicher Schrittweite für Trend
+            import math
             today = datetime.date.today()
-            def count_in_period(days):
-                since = today - datetime.timedelta(days=days)
-                return len([d for d in relevant if d >= since])
-            rel_1m = count_in_period(28)
-            rel_3m = count_in_period(84)
-            rel_6m = count_in_period(168)
-            def pct_change(now, prev):
-                return round((now-prev)/prev*100,1) if prev else 0.0
-            trend_1m = pct_change(rel_1m, rel_3m-rel_1m)
-            trend_3m = pct_change(rel_3m, rel_6m-rel_3m)
+
+            def get_rolling_windows(start_date, end_date, window_days=28, step_days=7):
+                windows = []
+                current_start = start_date
+                while current_start + datetime.timedelta(days=window_days-1) <= end_date:
+                    current_end = current_start + datetime.timedelta(days=window_days-1)
+                    windows.append((current_start, current_end))
+                    current_start += datetime.timedelta(days=step_days)
+                return windows
+
+            windows = get_rolling_windows(start_d, end_d)
+
+            def attendance_in_window(start, end, child_key):
+                planned_days = [d for d in planned if start <= d <= end and d.weekday() in sel_wds]
+                if not planned_days:
+                    return 0, 0
+                attended = sum(1 for d in planned_days if getattr(visit_status.get(d, VisitStatus(d)), child_key))
+                return attended, len(planned_days)
+
+            trend_lines = []
+            for i, (start_w, end_w) in enumerate(windows):
+                att, total_days = attendance_in_window(start_w, end_w, key)
+                pct = round(att / total_days * 100, 1) if total_days else 0.0
+                if i == 0:
+                    change = 0.0
+                else:
+                    prev_att, prev_total = attendance_in_window(*windows[i-1], key)
+                    prev_pct = round(prev_att / prev_total * 100, 1) if prev_total else 0.0
+                    change = round(pct - prev_pct, 1)
+                trend_lines.append(f"{start_w.strftime('%d.%m.%Y')} - {end_w.strftime('%d.%m.%Y')}: {att}/{total_days} ({pct}%, {change:+}%)")
+
             summary = (
                 f"Geplante Umgänge: {total}\n"
                 f"{mode} anwesend: {rel} ({pct_rel}%)\n"
                 f"{mode} abwesend: {miss} ({pct_miss}%)\n"
                 f"\nWochentagsauswertung ({mode} anwesend):\n" + "\n".join(weekday_stats) +
-                f"\n\nEntwicklung Umgangsfrequenz (letzte 4/12/24 Wochen):\nLetzte 4 Wochen: {rel_1m} ({trend_1m}% Veränderung)\nLetzte 12 Wochen: {rel_3m} ({trend_3m}% Veränderung)\nLetzte 24 Wochen: {rel_6m}"
+                f"\n\nEntwicklung Umgangsfrequenz (rollierende 4-Wochen-Fenster):\n" + "\n".join(trend_lines)
             )
+
             self.result.setPlainText(summary)
             self.filtered_visits = [v for v in visits_list if v["day"] in planned]
             self.update_trend_chart(self.filtered_visits)
