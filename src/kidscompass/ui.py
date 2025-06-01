@@ -575,7 +575,7 @@ class ExportWorker(QObject):
     finished = Signal(str)
     error = Signal(str)
 
-    def __init__(self, parent, df, dt, patterns, overrides, visit_status):
+    def __init__(self, parent, df, dt, patterns, overrides, visit_status, out_fn=None):
         super().__init__()
         self.parent = parent
         self.df = df
@@ -583,6 +583,7 @@ class ExportWorker(QObject):
         self.patterns = patterns
         self.overrides = overrides
         self.visit_status = visit_status
+        self.out_fn = out_fn or 'kidscompass_report.pdf'
 
     def run(self):
         logging.info("[KidsCompass] ExportWorker.run gestartet.")
@@ -633,26 +634,27 @@ class ExportWorker(QObject):
                     ['Beide da', f'Mind. 1 fehlt ({pct_mindestens_einer_oder_beide}%)', 'Beide fehlen'],
                     png_both,
                     colors=colors_both,
-                    return_handles=True,
-                    subtitle="Beide"
+                    return_handles=True
+                    # subtitle="Beide"  # Entfernt, damit das Wort nicht im Kuchendiagramm erscheint
                 )
             except Exception as e:
                 logging.error(f"Fehler bei create_pie_chart: {e}")
                 self.error.emit(f"Fehler bei Diagrammerstellung: {e}")
                 return
-            c = canvas.Canvas('kidscompass_report.pdf',pagesize=letter)
-            w,h = letter
-            y = h - 50
-            c.setFont('Helvetica-Bold',14)
-            c.drawString(50, y, 'KidsCompass Report')
-            y -= 30
-            c.setFont('Helvetica',10)
-            c.drawString(50, y, f"Zeitraum: {self.df.isoformat()} bis {self.dt.isoformat()}")
-            y -= 20
-            c.drawString(50, y, f"Geplante Umgänge: {stats['total']}")
-            y -= 20
-            c.drawString(50, y, f"Abweichungstage: {len(deviations)}")
-            y -= 20
+            # --- ReportLab Flowable-Export statt Canvas ---
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
+            from reportlab.lib.styles import getSampleStyleSheet
+            from reportlab.lib import colors
+            import tempfile
+            doc = SimpleDocTemplate(self.out_fn, pagesize=letter)
+            styles = getSampleStyleSheet()
+            elements = []
+            elements.append(Paragraph('<b>KidsCompass Report</b>', styles['Title']))
+            elements.append(Spacer(1, 12))
+            elements.append(Paragraph(f"Zeitraum: {self.df.isoformat()} bis {self.dt.isoformat()}", styles['Normal']))
+            elements.append(Spacer(1, 12))
+            elements.append(Paragraph(f"Geplante Umgänge: {stats['total']}", styles['Normal']))
+            elements.append(Paragraph(f"Abweichungstage: {len(deviations)}", styles['Normal']))
             total = stats['total']
             dev = len(deviations)
             pct_dev = round(dev / total * 100, 1) if total else 0.0
@@ -660,48 +662,65 @@ class ExportWorker(QObject):
             pct_a = round(miss_a / total * 100, 1) if total else 0.0
             miss_b = stats['missed_b']
             pct_b = round(miss_b / total * 100, 1) if total else 0.0
-            c.drawString(50, y, f"Abweichungstage: {dev} ({pct_dev}%)")
-            y -= 20
-            c.drawString(50, y, f"Kind A Abweichungstage: {miss_a} ({pct_a}%)")
-            y -= 15
-            c.drawString(50, y, f"Kind B Abweichungstage: {miss_b} ({pct_b}%)")
-            y -= 20
+            elements.append(Paragraph(f"Abweichungstage: {dev} ({pct_dev}%)", styles['Normal']))
+            elements.append(Paragraph(f"Kind A Abweichungstage: {miss_a} ({pct_a}%)", styles['Normal']))
+            elements.append(Paragraph(f"Kind B Abweichungstage: {miss_b} ({pct_b}%)", styles['Normal']))
+            elements.append(Spacer(1, 12))
+            # Tabelle der Abweichungen
             weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+            table_data = [["Datum", "Wochentag", "Status"]]
             for d, st in deviations:
-                if y < 100:
-                    c.showPage()
-                    y = h - 50
-                    c.setFont('Helvetica-Bold', 12)
-                    c.drawString(50, y, "Datum      | Wochentag | A | B")
-                    y -= 20
-                    c.setFont('Helvetica', 10)
                 wd = weekdays[d.weekday()]
-                c.drawString(60, y, f"{d.isoformat()} ({wd}): {st}")
-                y -= 15
-            # Weniger Abstand nach Liste
-            y -= 10
-            c.showPage()
-            size = 150
-            # Zentrierte Positionen
-            x_center = w / 2
-            spacing = 20
-            total_width = size * 2 + spacing
-            x_left = x_center - total_width / 2
-            x_right = x_center + spacing / 2
-            y_top = y
-            y_bottom = y - size - 20
-            # Beschriftungen
-            c.setFont('Helvetica-Bold', 12)
-            c.drawCentredString(x_left + size / 2, y_top + 15, 'Kind A')
-            c.drawCentredString(x_right + size / 2, y_top + 15, 'Kind B')
-            # c.drawCentredString(x_center, y_bottom + 15, 'Beide')  # Entfernt, da Beschriftung nun im Diagramm
-            # Zeichne zwei Diagramme oben
-            c.drawImage(png_a, x_left, y_top - size, width=size, height=size)
-            c.drawImage(png_b, x_right, y_top - size, width=size, height=size)
-            # Zeichne drittes Diagramm zentriert darunter
-            c.drawImage(png_both, x_center - size / 2, y_bottom - size, width=size, height=size)
-            c.save()
+                table_data.append([d.isoformat(), wd, st])
+            t = Table(table_data, repeatRows=1)
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.lightblue),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.black),
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,0), (-1,0), 10),
+                ('BOTTOMPADDING', (0,0), (-1,0), 8),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+            ]))
+            elements.append(t)
+            elements.append(Spacer(1, 24))
+            # Kuchendiagramme als Images oben platzieren
+            elements.append(Paragraph("<b>Kuchendiagramme</b>", styles['Heading2']))
+            elements.append(Spacer(1, 18))
+            # Zeile mit Kind A und Kind B, größere Bilder und größere Labels
+            img_row = []
+            label_row = []
+            for img_path, label in zip([png_a, png_b], ["Kind A", "Kind B"]):
+                img_row.append(Image(img_path, width=180, height=180))
+                label_row.append(Paragraph(f"<b>{label}</b>", styles['BodyText']))
+            t_imgs = Table([img_row], colWidths=[200, 200])
+            t_imgs.setStyle(TableStyle([
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ]))
+            t_labels = Table([label_row], colWidths=[200, 200])
+            t_labels.setStyle(TableStyle([
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('FONTSIZE', (0,0), (-1,-1), 14),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+            ]))
+            elements.append(t_imgs)
+            elements.append(t_labels)
+            elements.append(Spacer(1, 24))
+            # Drittes Diagramm "Beide" zentriert, darunter mittig und groß das Label
+            elements.append(Image(png_both, width=220, height=220))
+            elements.append(Spacer(1, 8))
+            beide_label = Paragraph('<b>Beide</b>', styles['Title'])
+            beide_table = Table([[beide_label]], colWidths=[220])
+            beide_table.setStyle(TableStyle([
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('FONTSIZE', (0,0), (-1,-1), 18),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 12),
+            ]))
+            elements.append(beide_table)
+            doc.build(elements)
             self.finished.emit('PDF erstellt')
+            return
         except Exception as e:
             logging.error(f"ExportWorker error: {e}")
             self.error.emit(str(e))
@@ -972,8 +991,12 @@ class MainWindow(QMainWindow):
 
         df = qdate_to_date(self.tab3.date_from.date())
         dt = qdate_to_date(self.tab3.date_to.date())
+        # Hole den Dateinamen aus dem Dialog
+        fn, _ = QFileDialog.getSaveFileName(self, "PDF Export speichern", filter="PDF-Datei (*.pdf)")
+        if not fn:
+            return
         self.export_thread = QThread()
-        self.export_worker = ExportWorker(self, df, dt, self.patterns, self.overrides, self.visit_status)
+        self.export_worker = ExportWorker(self, df, dt, self.patterns, self.overrides, self.visit_status, out_fn=fn)
         self.export_worker.moveToThread(self.export_thread)
         self.export_thread.started.connect(self.export_worker.run)
         self.export_worker.finished.connect(self.on_export_finished)
