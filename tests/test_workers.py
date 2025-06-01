@@ -154,8 +154,8 @@ def test_export_worker_success(qapp, tmp_path):
 
     df = date(2023, 1, 1)
     dt = date(2023, 1, 2)
-
-    worker = ExportWorker(qapp, df, dt, [], [], visit_status)
+    report_file = tmp_path / "kidscompass_report.pdf"
+    worker = ExportWorker(qapp, df, dt, [], [], visit_status, out_fn=str(report_file))
     results = []
     errors = []
     worker.finished.connect(lambda: results.append("done"))
@@ -171,12 +171,11 @@ def test_export_worker_success(qapp, tmp_path):
     assert results
     assert not errors
 
-    # Check for report file in current working directory
-    report_file = os.path.abspath("kidscompass_report.pdf")
-    assert os.path.exists(report_file)
+    # Check for report file in tmp_path
+    assert report_file.exists()
 
     # Clean up
-    os.remove(report_file)
+    report_file.unlink()
 
 
 def test_export_worker_failure(qapp, tmp_path):
