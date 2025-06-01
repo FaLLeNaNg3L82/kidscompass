@@ -250,6 +250,9 @@ class ExportTab(QWidget):
 
     def on_restore_finished(self):
         QMessageBox.information(self, RESTORE_SUCCESS_TITLE, RESTORE_SUCCESS_TEXT)
+        # Nach Restore: Patterns/Overrides in der UI neu laden
+        if hasattr(self.parent, 'load_config'):
+            self.parent.load_config()
 
     def on_restore_error(self, msg):
         logging.error(f"Restore error: {msg}")
