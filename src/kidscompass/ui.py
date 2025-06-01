@@ -330,61 +330,102 @@ class StatisticsTab(QWidget):
         end_d   = self.date_to.date().toPython()
         mode = self.get_status_mode()
         db = self.parent.db
-        visits_list = db.query_visits(start_d, end_d, sel_wds, {  # Filter wird im nächsten Schritt angepasst
-            "both_present": mode == "Beide",
+        visits_list = db.query_visits(start_d, end_d, sel_wds, {
+            "both_present": False,  # Kein Vorfilter mehr, wir werten alles aus
             "a_absent": False,
             "b_absent": False,
             "both_absent": False
         })
-        # --- Neue Auswertung ---
         from collections import defaultdict
         weekday_names = ["Mo","Di","Mi","Do","Fr","Sa","So"]
-        # Filter nach Modus
-        if mode == "Kind A":
-            relevant = [v for v in visits_list if v["present_child_a"]]
-            missed = [v for v in visits_list if not v["present_child_a"]]
-        elif mode == "Kind B":
-            relevant = [v for v in visits_list if v["present_child_b"]]
-            missed = [v for v in visits_list if not v["present_child_b"]]
-        else:  # Beide
-            relevant = [v for v in visits_list if v["present_child_a"] and v["present_child_b"]]
-            missed = [v for v in visits_list if not (v["present_child_a"] and v["present_child_b"])]
         total = len(visits_list)
-        rel = len(relevant)
-        miss = len(missed)
-        pct_rel = round(rel/total*100,1) if total else 0.0
-        pct_miss = round(miss/total*100,1) if total else 0.0
-        # Wochentagsauswertung
-        weekday_count = defaultdict(int)
-        for v in relevant:
-            weekday_count[v["day"].weekday()] += 1
-        weekday_stats = [f"{weekday_names[i]}: {weekday_count[i]}x ({round(weekday_count[i]/total*100,1) if total else 0.0}%)" for i in range(7)]
-        # Entwicklung der letzten 1, 3, 6 Monate
-        today = datetime.date.today()
-        def count_in_period(months):
-            from dateutil.relativedelta import relativedelta
-            since = today - relativedelta(months=months)
-            return len([v for v in relevant if v["day"] >= since])
-        rel_1m = count_in_period(1)
-        rel_3m = count_in_period(3)
-        rel_6m = count_in_period(6)
-        # Entwicklung prozentual
-        def pct_change(now, prev):
-            return round((now-prev)/prev*100,1) if prev else 0.0
-        trend_1m = pct_change(rel_1m, rel_3m-rel_1m)
-        trend_3m = pct_change(rel_3m, rel_6m-rel_3m)
-        # Zusammenfassung
-        summary = (
-            f"Gefundene Termine: {total}\n"
-            f"{mode} anwesend: {rel} ({pct_rel}%)\n"
-            f"{mode} abwesend: {miss} ({pct_miss}%)\n"
-            f"\nWochentagsauswertung ({mode} anwesend):\n" + "\n".join(weekday_stats) +
-            f"\n\nEntwicklung Umgangsfrequenz:\nLetzter Monat: {rel_1m} ({trend_1m}% Veränderung)\nLetzte 3 Monate: {rel_3m} ({trend_3m}% Veränderung)\nLetzte 6 Monate: {rel_6m}"
-        )
-        self.result.setPlainText(summary)
-        self.filtered_visits = visits_list  # Für Export
-        # --- Trend-Chart erzeugen ---
-        self.update_trend_chart(relevant)
+        if mode == "Beide":
+            # Für beide Kinder getrennt auswerten
+            rel_a = sum(1 for v in visits_list if v["present_child_a"])
+            rel_b = sum(1 for v in visits_list if v["present_child_b"])
+            miss_a = total - rel_a
+            miss_b = total - rel_b
+            pct_rel_a = round(rel_a/total*100,1) if total else 0.0
+            pct_rel_b = round(rel_b/total*100,1) if total else 0.0
+            pct_miss_a = round(miss_a/total*100,1) if total else 0.0
+            pct_miss_b = round(miss_b/total*100,1) if total else 0.0
+            # Wochentagsauswertung
+            weekday_count_a = defaultdict(int)
+            weekday_count_b = defaultdict(int)
+            for v in visits_list:
+                if v["present_child_a"]:
+                    weekday_count_a[v["day"].weekday()] += 1
+                if v["present_child_b"]:
+                    weekday_count_b[v["day"].weekday()] += 1
+            weekday_stats = [
+                f"{weekday_names[i]}: A {weekday_count_a[i]}x ({round(weekday_count_a[i]/total*100,1) if total else 0.0}%), "
+                f"B {weekday_count_b[i]}x ({round(weekday_count_b[i]/total*100,1) if total else 0.0}%)"
+                for i in range(7)
+            ]
+            # Entwicklung der letzten 1, 3, 6 Monate
+            today = datetime.date.today()
+            def count_in_period(months, key):
+                from dateutil.relativedelta import relativedelta
+                since = today - relativedelta(months=months)
+                return sum(1 for v in visits_list if v["day"] >= since and v[key])
+            rel_1m_a = count_in_period(1, "present_child_a")
+            rel_3m_a = count_in_period(3, "present_child_a")
+            rel_6m_a = count_in_period(6, "present_child_a")
+            rel_1m_b = count_in_period(1, "present_child_b")
+            rel_3m_b = count_in_period(3, "present_child_b")
+            rel_6m_b = count_in_period(6, "present_child_b")
+            def pct_change(now, prev):
+                return round((now-prev)/prev*100,1) if prev else 0.0
+            trend_1m_a = pct_change(rel_1m_a, rel_3m_a-rel_1m_a)
+            trend_3m_a = pct_change(rel_3m_a, rel_6m_a-rel_3m_a)
+            trend_1m_b = pct_change(rel_1m_b, rel_3m_b-rel_1m_b)
+            trend_3m_b = pct_change(rel_3m_b, rel_6m_b-rel_3m_b)
+            summary = (
+                f"Gefundene Termine: {total}\n"
+                f"Kind A anwesend: {rel_a} ({pct_rel_a}%)\nKind A abwesend: {miss_a} ({pct_miss_a}%)\n"
+                f"Kind B anwesend: {rel_b} ({pct_rel_b}%)\nKind B abwesend: {miss_b} ({pct_miss_b}%)\n"
+                f"\nWochentagsauswertung:\n" + "\n".join(weekday_stats) +
+                f"\n\nEntwicklung Umgangsfrequenz:\n"
+                f"Kind A letzter Monat: {rel_1m_a} ({trend_1m_a}% Veränderung)\nKind A letzte 3 Monate: {rel_3m_a} ({trend_3m_a}% Veränderung)\nKind A letzte 6 Monate: {rel_6m_a}\n"
+                f"Kind B letzter Monat: {rel_1m_b} ({trend_1m_b}% Veränderung)\nKind B letzte 3 Monate: {rel_3m_b} ({trend_3m_b}% Veränderung)\nKind B letzte 6 Monate: {rel_6m_b}"
+            )
+            self.result.setPlainText(summary)
+            self.filtered_visits = visits_list
+            self.update_trend_chart(visits_list)  # alle visits für beide Linien
+        else:
+            # Einzelkind-Modus wie gehabt
+            relevant = [v for v in visits_list if v["present_child_a"]] if mode=="Kind A" else [v for v in visits_list if v["present_child_b"]]
+            missed = [v for v in visits_list if not v["present_child_a"]] if mode=="Kind A" else [v for v in visits_list if not v["present_child_b"]]
+            rel = len(relevant)
+            miss = len(missed)
+            pct_rel = round(rel/total*100,1) if total else 0.0
+            pct_miss = round(miss/total*100,1) if total else 0.0
+            weekday_count = defaultdict(int)
+            for v in relevant:
+                weekday_count[v["day"].weekday()] += 1
+            weekday_stats = [f"{weekday_names[i]}: {weekday_count[i]}x ({round(weekday_count[i]/total*100,1) if total else 0.0}%)" for i in range(7)]
+            today = datetime.date.today()
+            def count_in_period(months):
+                from dateutil.relativedelta import relativedelta
+                since = today - relativedelta(months=months)
+                return len([v for v in relevant if v["day"] >= since])
+            rel_1m = count_in_period(1)
+            rel_3m = count_in_period(3)
+            rel_6m = count_in_period(6)
+            def pct_change(now, prev):
+                return round((now-prev)/prev*100,1) if prev else 0.0
+            trend_1m = pct_change(rel_1m, rel_3m-rel_1m)
+            trend_3m = pct_change(rel_3m, rel_6m-rel_3m)
+            summary = (
+                f"Gefundene Termine: {total}\n"
+                f"{mode} anwesend: {rel} ({pct_rel}%)\n"
+                f"{mode} abwesend: {miss} ({pct_miss}%)\n"
+                f"\nWochentagsauswertung ({mode} anwesend):\n" + "\n".join(weekday_stats) +
+                f"\n\nEntwicklung Umgangsfrequenz:\nLetzter Monat: {rel_1m} ({trend_1m}% Veränderung)\nLetzte 3 Monate: {rel_3m} ({trend_3m}% Veränderung)\nLetzte 6 Monate: {rel_6m}"
+            )
+            self.result.setPlainText(summary)
+            self.filtered_visits = visits_list
+            self.update_trend_chart(relevant)
 
     def update_trend_chart(self, relevant):
         mode = self.get_status_mode()
@@ -485,7 +526,7 @@ class StatisticsTab(QWidget):
         summary = self.result.toPlainText()
         # --- Tabelle der Termine ---
         weekday_names = ["Mo","Di","Mi","Do","Fr","Sa","So"]
-        table_data = [["Datum", "Wochentag", "A", "B"]]
+        table_data = [["Datum", "Wochentag", "A anwesend (1=ja, 0=nein)", "B anwesend (1=ja, 0=nein)"]]
         for v in self.filtered_visits:
             d = v["day"]
             wd = weekday_names[d.weekday()]
