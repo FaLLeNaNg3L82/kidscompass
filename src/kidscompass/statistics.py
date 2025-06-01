@@ -49,3 +49,25 @@ def summarize_visits(planned: List[date], visit_status: Dict[date, VisitStatus])
         'both_missing': both_missing,
         'both_present': both_present,
     }
+
+
+def calculate_trends(filtered_visits: List[Dict], period: str = 'weekly') -> Dict[str, List[int]]:
+    """Berechnet Trends basierend auf gefilterten Besuchsdaten."""
+    from collections import defaultdict
+    from datetime import timedelta
+
+    trends = defaultdict(int)
+
+    for visit in filtered_visits:
+        day = visit['day']
+        if period == 'weekly':
+            key = day.isocalendar()[1]  # Kalenderwoche
+        elif period == 'monthly':
+            key = day.month
+        else:
+            key = day.year
+
+        trends[key] += 1
+
+    sorted_keys = sorted(trends.keys())
+    return {"periods": sorted_keys, "counts": [trends[k] for k in sorted_keys]}

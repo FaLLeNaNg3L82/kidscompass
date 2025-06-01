@@ -1,5 +1,5 @@
 import sys
-from datetime import date
+import datetime
 from typing import List
 import os
 import logging
@@ -21,7 +21,8 @@ from PySide6.QtGui import QTextCharFormat, QBrush, QColor
 from PySide6.QtCore import Qt, QDate, QThread, Signal, QObject, QMutex
 from kidscompass.calendar_logic import generate_standard_days, apply_overrides
 from kidscompass.data import Database
-from kidscompass.statistics import count_missing_by_weekday, summarize_visits
+from kidscompass.statistics import count_missing_by_weekday, summarize_visits, calculate_trends
+import matplotlib.pyplot as plt
 
 
 
@@ -50,7 +51,7 @@ COLOR_BOTH_MISSING = '#FF0000'  # Beide fehlen = rot
 
 def qdate_to_date(qdate):
     """Hilfsfunktion: QDate -> datetime.date"""
-    return qdate.toPython() if hasattr(qdate, 'toPython') else date(qdate.year(), qdate.month(), qdate.day())
+    return qdate.toPython() if hasattr(qdate, 'toPython') else datetime.date(qdate.year(), qdate.month(), qdate.day())
 
 # === UI Text Constants ===
 BACKUP_BTN_TEXT = "DB Backup"
@@ -99,10 +100,10 @@ class SettingsTab(QWidget):
         self.interval = QSpinBox(); self.interval.setRange(1, 52); self.interval.setValue(1)
         param_layout.addWidget(self.interval)
         param_layout.addWidget(QLabel(FROM_LABEL))
-        self.start_date = QDateEdit(QDate(date.today().year, 1, 1)); self.start_date.setCalendarPopup(True)
+        self.start_date = QDateEdit(QDate(datetime.date.today().year, 1, 1)); self.start_date.setCalendarPopup(True)
         param_layout.addWidget(self.start_date)
         param_layout.addWidget(QLabel(TO_LABEL))
-        self.end_date = QDateEdit(QDate(date.today().year, 12, 31)); self.end_date.setCalendarPopup(True)
+        self.end_date = QDateEdit(QDate(datetime.date.today().year, 12, 31)); self.end_date.setCalendarPopup(True)
         param_layout.addWidget(self.end_date)
         self.chk_infinite = QCheckBox(INFINITE_LABEL)
         param_layout.addWidget(self.chk_infinite)
@@ -250,80 +251,98 @@ class ExportTab(QWidget):
         logging.error(f"Restore error: {msg}")
         QMessageBox.critical(self, RESTORE_ERROR_TITLE, msg)
 
-class StatisticsWorker(QObject):
-    finished = Signal(list)
-    error = Signal(str)
-
-    def __init__(self, db):
-        super().__init__()
-        self.db = db
-
-    def run(self):
-        try:
-            stats = count_missing_by_weekday(self.db)
-            self.finished.emit(stats)
-        except Exception as e:
-            logging.error(f"StatisticsWorker error: {e}")
-            self.error.emit(str(e))
-
 class StatisticsTab(QWidget):
     def __init__(self, parent):
         super().__init__()
         self.parent = parent
         layout = QVBoxLayout(self)
 
-        period = QHBoxLayout(); period.addWidget(QLabel(FROM_LABEL))
-        self.date_from = QDateEdit(QDate.currentDate()); self.date_from.setCalendarPopup(True)
-        period.addWidget(self.date_from); period.addWidget(QLabel(TO_LABEL))
-        self.date_to = QDateEdit(QDate.currentDate()); self.date_to.setCalendarPopup(True)
-        period.addWidget(self.date_to); layout.addLayout(period)
+        # — Zeitraum —
+        period = QHBoxLayout()
+        period.addWidget(QLabel("Von:"))
+        self.date_from = QDateEdit(QDate.currentDate())
+        self.date_from.setCalendarPopup(True)
+        period.addWidget(self.date_from)
+        period.addWidget(QLabel("Bis:"))
+        self.date_to = QDateEdit(QDate.currentDate())
+        self.date_to.setCalendarPopup(True)
+        period.addWidget(self.date_to)
+        layout.addLayout(period)
 
-        wd_group = QGroupBox("Wochentage")
-        wd_l = QHBoxLayout(wd_group)
+        # — Wochentags-Filter —
+        wd_group = QGroupBox("Wochentage wählen")
+        wd_layout = QHBoxLayout(wd_group)
         self.wd_checks = []
-        for i,name in enumerate(['Mo','Di','Mi','Do','Fr','Sa','So']):
-            cb = QCheckBox(name); wd_l.addWidget(cb); self.wd_checks.append((i,cb))
+        for i, name in enumerate(["Mo","Di","Mi","Do","Fr","Sa","So"]):
+            cb = QCheckBox(name)
+            wd_layout.addWidget(cb)
+            self.wd_checks.append((i, cb))
         layout.addWidget(wd_group)
 
+        # — Status-Filter —
         status_group = QGroupBox("Status-Filter")
-        sl = QHBoxLayout(status_group)
-        self.cb_a_absent = QCheckBox("A fehlt"); self.cb_b_absent = QCheckBox("B fehlt")
-        self.cb_both_absent = QCheckBox("beide fehlen"); self.cb_both_present = QCheckBox("beide da")
-        for cb in (self.cb_a_absent,self.cb_b_absent,self.cb_both_absent,self.cb_both_present): sl.addWidget(cb)
+        status_layout = QHBoxLayout(status_group)
+        self.cb_a_absent     = QCheckBox("A fehlt")
+        self.cb_b_absent     = QCheckBox("B fehlt")
+        self.cb_both_absent  = QCheckBox("beide fehlen")
+        self.cb_both_present = QCheckBox("beide da")
+        for cb in (self.cb_a_absent, self.cb_b_absent, self.cb_both_absent, self.cb_both_present):
+            status_layout.addWidget(cb)
         layout.addWidget(status_group)
 
-        self.btn_calc = QPushButton(STATISTICS_BTN_TEXT); layout.addWidget(self.btn_calc)
-        self.result   = QTextEdit(); self.result.setReadOnly(True); layout.addWidget(self.result)
+        # — Button zum Berechnen —
+        self.btn_calc = QPushButton("Statistik berechnen")
+        layout.addWidget(self.btn_calc)
+
+        # — Ausgabe-Feld —
+        self.result = QTextEdit()
+        self.result.setReadOnly(True)
+        layout.addWidget(self.result)
+
+        # Signal:
         self.btn_calc.clicked.connect(self.on_calculate)
 
+    def get_status_filters(self) -> dict:
+        """
+        Gibt ein Dict zurück, das genau die vier möglichen Filter-Keys
+        auf True/False setzt. Wird in query_visits() per status_filters.get("key") benutzt.
+        """
+        d = {
+            "both_present":   self.cb_both_present.isChecked(),
+            "both_absent":    self.cb_both_absent.isChecked(),
+            "a_absent":       self.cb_a_absent.isChecked(),
+            "b_absent":       self.cb_b_absent.isChecked(),
+        }
+        print("DEBUG: returning status_filters =", d)  # kurzer Debug-Print
+        return d
+
     def on_calculate(self):
-        if hasattr(self.parent, 'worker_thread') and self.parent.worker_thread and self.parent.worker_thread.isRunning():
-            return
+        # 1) Gewählte Wochentage sammeln
+        sel_wds = [i for i, cb in self.wd_checks if cb.isChecked()]
 
-        self.btn_calc.setEnabled(False)
-        self.result.clear()
-        self.worker_thread = QThread()
-        self.worker = StatisticsWorker(self.parent.db)
-        self.worker.moveToThread(self.worker_thread)
-        self.worker_thread.started.connect(self.worker.run)
-        self.worker.finished.connect(self.on_calculate_finished)
-        self.worker.error.connect(self.on_calculate_error)
-        self.worker.finished.connect(self.worker_thread.quit)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
-        self.worker_thread.start()
+        # 2) Datum von/bis
+        start_d = self.date_from.date().toPython()
+        end_d   = self.date_to.date().toPython()
 
-    def on_calculate_finished(self, stats):
-        self.btn_calc.setEnabled(True)
-        text = f"A fehlt: {stats[0]['missed_a']}\n"
-        text += f"B fehlt: {stats[1]['missed_b']}\n"
-        text += f"Beide fehlen: {stats[2]['both_missing']}"
-        self.result.setPlainText(text)
+        # 3) Status-Filter als Dict
+        status_filters = self.get_status_filters()
+        print("DEBUG: in on_calculate, status_filters =", status_filters)
 
-    def on_calculate_error(self, msg):
-        logging.error(f"Statistics error: {msg}")
-        self.btn_calc.setEnabled(True)
-        QMessageBox.critical(self, "Fehler bei Statistik", msg)
+        # 4) Datenbank-Abfrage
+        db = self.parent.db  # habt ihr z.B. schon in MainWindow definiert
+        visits_list = db.query_visits(start_d, end_d, sel_wds, status_filters)
+
+        # 5) Ergebnis anzeigen (nur als Text, oder binden in count_missing_by_weekday o.Ä.)
+        total = len(visits_list)
+        missed_a = sum(not vs["present_child_a"] for vs in visits_list)
+        missed_b = sum(not vs["present_child_b"] for vs in visits_list)
+
+        summary = (
+            f"Gefundene Termine: {total}\n"
+            f"Kind A Abwesenheiten: {missed_a}\n"
+            f"Kind B Abwesenheiten: {missed_b}\n"
+        )
+        self.result.setPlainText(summary)
 
 class ExportWorker(QObject):
     finished = Signal(str)
@@ -464,17 +483,27 @@ class BackupWorker(QObject):
         super().__init__()
         self.db = db
         self.fn = fn
+        self._stopped = False
+
+    def stop(self):
+        self._stopped = True
 
     def run(self):
+        if self._stopped:
+            return
+
         try:
             self.db.export_to_sql(self.fn)
-            self.finished.emit(self.fn)
+            if not self._stopped:
+                self.finished.emit(self.fn)
         except OSError as e:
             logging.error(f"BackupWorker OSError: {e}")
-            self.error.emit(f"Dateifehler: {e}")
+            if not self._stopped:
+                self.error.emit(f"Dateifehler: {e}")
         except Exception as e:
             logging.error(f"BackupWorker error: {e}")
-            self.error.emit(str(e))
+            if not self._stopped:
+                self.error.emit(str(e))
 
 class RestoreWorker(QObject):
     finished = Signal()
@@ -485,21 +514,34 @@ class RestoreWorker(QObject):
         self.db = db
         self.fn = fn
         self.parent = parent
+        self._stopped = False
+
+    def stop(self):
+        self._stopped = True
 
     def run(self):
+        if self._stopped:
+            return
+
         try:
             self.db.import_from_sql(self.fn)
+            if self._stopped:
+                return
+
             self.parent.visit_status = self.db.load_all_status()
-            self.parent.patterns     = self.db.load_patterns()
-            self.parent.overrides    = self.db.load_overrides()
+            self.parent.patterns = self.db.load_patterns()
+            self.parent.overrides = self.db.load_overrides()
             self.parent.refresh_calendar()
-            self.finished.emit()
-        except OSError as e:
-            logging.error(f"RestoreWorker OSError: {e}")
-            self.error.emit(f"Dateifehler: {e}")
+
+            if not self._stopped:
+                self.finished.emit()
+
+        except IOError as e:
+            if not self._stopped:
+                self.error.emit(f"Dateifehler: {e}")
         except Exception as e:
-            logging.error(f"RestoreWorker error: {e}")
-            self.error.emit(str(e))
+            if not self._stopped:
+                self.error.emit(str(e))
 
 class MainWindow(QMainWindow):
     def __init__(self, db=None):
@@ -553,7 +595,7 @@ class MainWindow(QMainWindow):
     def refresh_calendar(self):
         cal = self.tab2.calendar
         cal.setDateTextFormat(QDate(), QTextCharFormat())
-        today = date.today()
+        today = datetime.date.today()
 
         def apply_format(d, color):
             qd = QDate(d.year, d.month, d.day)
@@ -563,7 +605,7 @@ class MainWindow(QMainWindow):
 
         self._mutex.lock()
         try:
-            raw: List[date] = []
+            raw: List[datetime.date] = []
             for p in self.patterns:
                 start_y = p.start_date.year
                 last_y = p.end_date.year if p.end_date else today.year

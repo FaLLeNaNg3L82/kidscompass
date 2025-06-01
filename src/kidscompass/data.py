@@ -1,21 +1,23 @@
 import os
 import sqlite3
 from datetime import date
+from typing import List, Dict
 from kidscompass.models import VisitPattern, OverridePeriod, RemoveOverride, VisitStatus
+import logging
 
 class Database:
     def __init__(self, db_path: str = None):
-        if db_path:
-            self.db_path = db_path
-        else:
-            # Standardpfad im Benutzerverzeichnis
-            self.db_path = os.path.join(os.path.expanduser("~"), ".kidscompass", "kidscompass.db")
-            # Stelle sicher, dass das Verzeichnis existiert
-            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        
-        self.conn = sqlite3.connect(self.db_path)
-        self.conn.row_factory = sqlite3.Row
-        self._ensure_tables()
+        try:
+            self.db_path = db_path or os.path.join(os.path.expanduser("~"), ".kidscompass", "kidscompass.db")
+            if self.db_path != ':memory:':
+                os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            self.conn = sqlite3.connect(self.db_path)
+            self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA foreign_keys = ON;")  # Enable foreign key constraints
+            self._ensure_tables()
+        except Exception as e:
+            logging.error(f"Database connection error: {e}")
+            raise
 
     def _ensure_tables(self):
         cur = self.conn.cursor()
@@ -211,6 +213,60 @@ class Database:
         
     def close(self):
         """Schließe die Datenbankverbindung sauber"""
+        if self.conn:
+            self.conn.close()
+            self.conn = None
+
+    def query_visits(
+        self,
+        start_date: date,
+        end_date: date,
+        weekdays: List[int],
+        status_filters: dict[str,bool]
+    ) -> List[dict]:
+        cur = self.conn.cursor()
+        query = "SELECT day, present_child_a, present_child_b FROM visit_status WHERE day BETWEEN ? AND ?"
+        params = [start_date.isoformat(), end_date.isoformat()]
+
+        results = []
+        for row in cur.execute(query, params):
+            day_date  = date.fromisoformat(row['day'])
+            present_a = bool(row['present_child_a'])
+            present_b = bool(row['present_child_b'])
+            # 1) Wochen-Filtern
+            if weekdays and day_date.weekday() not in weekdays:
+                continue
+
+            # 2) Status-Filter
+            if status_filters.get("both_present") and not (present_a and present_b):
+                continue
+            if status_filters.get("both_absent") and (present_a or present_b):
+                continue
+            if status_filters.get("a_absent") and present_a:
+                continue
+            if status_filters.get("b_absent") and present_b:
+                continue
+
+            results.append({
+                "day": day_date,
+                "present_child_a": present_a,
+                "present_child_b": present_b
+            })
+
+        return results
+
+    def load_all_status(self) -> Dict[date, 'VisitStatus']:
+        cur = self.conn.cursor()
+        cur.execute("SELECT day, present_child_a, present_child_b FROM visit_status")
+        status = {}
+        for row in cur.fetchall():
+            d0 = date.fromisoformat(row['day'])
+            vs = VisitStatus(d0, bool(row['present_child_a']), bool(row['present_child_b']))
+            status[d0] = vs
+        cur.close()
+        return status
+
+    def close(self):
         if self.conn:
             self.conn.close()
             self.conn = None
