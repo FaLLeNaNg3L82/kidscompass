@@ -387,31 +387,61 @@ class StatisticsTab(QWidget):
         self.update_trend_chart(relevant)
 
     def update_trend_chart(self, relevant):
-        if not relevant:
+        mode = self.get_status_mode()
+        if not self.filtered_visits:
             self.chart_label.clear()
             return
-        # Gruppiere nach Monat
-        from collections import Counter
+        from collections import Counter, defaultdict
         import calendar
-        months = [v['day'].replace(day=1) for v in relevant]
-        count_per_month = Counter(months)
-        if not count_per_month:
-            self.chart_label.clear()
-            return
-        # Sortiere nach Zeit
-        sorted_months = sorted(count_per_month.keys())
-        x = [m.strftime('%Y-%m') for m in sorted_months]
-        y = [count_per_month[m] for m in sorted_months]
-        # Plotten
-        fig, ax = plt.subplots(figsize=(5,2.5))
-        ax.plot(x, y, marker='o', color='#1976d2')
-        ax.set_title('Umgangsfrequenz pro Monat')
-        ax.set_xlabel('Monat')
-        ax.set_ylabel('Umgänge')
-        ax.grid(True, linestyle=':')
-        plt.xticks(rotation=30, ha='right')
-        fig.tight_layout()
-        # Temporäre Datei für das Bild
+        # Berechne geplante Umgangstage pro Monat
+        all_months = set()
+        planned_per_month = defaultdict(int)
+        for v in self.filtered_visits:
+            m = v['day'].replace(day=1)
+            planned_per_month[m] += 1
+            all_months.add(m)
+        sorted_months = sorted(all_months)
+        # Berechne tatsächliche Anwesenheit pro Monat
+        if mode == 'Beide':
+            present_a = defaultdict(int)
+            present_b = defaultdict(int)
+            for v in self.filtered_visits:
+                m = v['day'].replace(day=1)
+                if v['present_child_a']:
+                    present_a[m] += 1
+                if v['present_child_b']:
+                    present_b[m] += 1
+            x = [m.strftime('%Y-%m') for m in sorted_months]
+            y_a = [round(present_a[m]/planned_per_month[m]*100,1) if planned_per_month[m] else 0 for m in sorted_months]
+            y_b = [round(present_b[m]/planned_per_month[m]*100,1) if planned_per_month[m] else 0 for m in sorted_months]
+            fig, ax = plt.subplots(figsize=(5,2.5))
+            ax.plot(x, y_a, marker='o', color='#1976d2', label='Kind A')
+            ax.plot(x, y_b, marker='o', color='#d32f2f', label='Kind B')
+            ax.set_title('Anwesenheit pro Monat (%)')
+            ax.set_xlabel('Monat')
+            ax.set_ylabel('Anwesenheit (%)')
+            ax.set_ylim(0, 105)
+            ax.legend()
+            ax.grid(True, linestyle=':')
+            plt.xticks(rotation=30, ha='right')
+            fig.tight_layout()
+        else:
+            present = defaultdict(int)
+            for v in self.filtered_visits:
+                m = v['day'].replace(day=1)
+                if (v['present_child_a'] if mode=='Kind A' else v['present_child_b']):
+                    present[m] += 1
+            x = [m.strftime('%Y-%m') for m in sorted_months]
+            y = [round(present[m]/planned_per_month[m]*100,1) if planned_per_month[m] else 0 for m in sorted_months]
+            fig, ax = plt.subplots(figsize=(5,2.5))
+            ax.plot(x, y, marker='o', color='#1976d2')
+            ax.set_title(f'Anwesenheit {mode} pro Monat (%)')
+            ax.set_xlabel('Monat')
+            ax.set_ylabel('Anwesenheit (%)')
+            ax.set_ylim(0, 105)
+            ax.grid(True, linestyle=':')
+            plt.xticks(rotation=30, ha='right')
+            fig.tight_layout()
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
             fig.savefig(tmp.name, bbox_inches='tight')
             plt.close(fig)
@@ -440,45 +470,64 @@ class StatisticsTab(QWidget):
         from PySide6.QtWidgets import QFileDialog
         from reportlab.lib.pagesizes import letter
         from reportlab.pdfgen import canvas
+        from reportlab.lib import colors
+        from reportlab.platypus import Table, TableStyle, SimpleDocTemplate, Paragraph, Spacer, Image
+        from reportlab.lib.styles import getSampleStyleSheet
+        import tempfile
         if not hasattr(self, 'filtered_visits') or not self.filtered_visits:
             QMessageBox.warning(self, "Export", "Bitte zuerst Filter setzen.")
             return
         fn, _ = QFileDialog.getSaveFileName(self, "PDF Export speichern", filter="PDF-Datei (*.pdf)")
         if not fn:
             return
-        c = canvas.Canvas(fn, pagesize=letter)
-        w, h = letter
-        y = h - 40
-        c.setFont('Helvetica-Bold', 14)
-        c.drawString(50, y, 'KidsCompass Statistik-Export')
-        y -= 30
-        c.setFont('Helvetica', 10)
-        c.drawString(50, y, f"Zeitraum: {self.date_from.date().toString()} bis {self.date_to.date().toString()}")
-        y -= 20
-        c.drawString(50, y, f"Gefundene Termine: {len(self.filtered_visits)}")
-        y -= 20
+        # --- Statistische Auswertung vorbereiten ---
         mode = self.get_status_mode()
-        c.drawString(50, y, f"{mode} anwesend: {sum(1 for v in self.filtered_visits if (v['present_child_a'] if mode=='Kind A' else v['present_child_b'] if mode=='Kind B' else v['present_child_a'] and v['present_child_b']))}")
-        y -= 20
-        c.drawString(50, y, f"{mode} abwesend: {sum(1 for v in self.filtered_visits if not (v['present_child_a'] if mode=='Kind A' else v['present_child_b'] if mode=='Kind B' else v['present_child_a'] and v['present_child_b']))}")
-        y -= 30
-        c.setFont('Helvetica-Bold', 12)
-        c.drawString(50, y, "Datum      | Wochentag | A | B")
-        y -= 20
+        summary = self.result.toPlainText()
+        # --- Tabelle der Termine ---
         weekday_names = ["Mo","Di","Mi","Do","Fr","Sa","So"]
+        table_data = [["Datum", "Wochentag", "A", "B"]]
         for v in self.filtered_visits:
-            if y < 60:
-                c.showPage()
-                y = h - 40
-                c.setFont('Helvetica-Bold', 12)
-                c.drawString(50, y, "Datum      | Wochentag | A | B")
-                y -= 20
-                c.setFont('Helvetica', 10)
             d = v["day"]
             wd = weekday_names[d.weekday()]
-            c.drawString(50, y, f"{d.isoformat()} | {wd}        | {int(v['present_child_a'])} | {int(v['present_child_b'])}")
-            y -= 15
-        c.save()
+            table_data.append([d.isoformat(), wd, int(v["present_child_a"]), int(v["present_child_b"])])
+        # --- Trend-Grafik erzeugen (wie im UI) ---
+        self.update_trend_chart([v for v in self.filtered_visits if (v['present_child_a'] if mode=='Kind A' else v['present_child_b'] if mode=='Kind B' else v['present_child_a'] and v['present_child_b'])])
+        # Hole das zuletzt erzeugte Chart-Bild
+        chart_pixmap = self.chart_label.pixmap()
+        chart_img_path = None
+        if chart_pixmap:
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                chart_pixmap.save(tmp.name)
+                chart_img_path = tmp.name
+        # --- PDF mit ReportLab erzeugen ---
+        doc = SimpleDocTemplate(fn, pagesize=letter)
+        styles = getSampleStyleSheet()
+        elements = []
+        elements.append(Paragraph("<b>KidsCompass Statistik-Export</b>", styles['Title']))
+        elements.append(Spacer(1, 12))
+        elements.append(Paragraph(f"Zeitraum: {self.date_from.date().toString()} bis {self.date_to.date().toString()}", styles['Normal']))
+        elements.append(Spacer(1, 12))
+        # Statistische Auswertung als Text
+        for line in summary.split('\n'):
+            elements.append(Paragraph(line, styles['Normal']))
+        elements.append(Spacer(1, 12))
+        # Trend-Grafik einfügen
+        if chart_img_path:
+            elements.append(Image(chart_img_path, width=400, height=150))
+            elements.append(Spacer(1, 12))
+        # Tabelle der Termine
+        t = Table(table_data, repeatRows=1)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.lightblue),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.black),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,0), 10),
+            ('BOTTOMPADDING', (0,0), (-1,0), 8),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ]))
+        elements.append(t)
+        doc.build(elements)
         QMessageBox.information(self, "Export", f"PDF erfolgreich gespeichert: {fn}")
 
 class ExportWorker(QObject):
@@ -581,6 +630,10 @@ class ExportWorker(QObject):
                 if y < 100:
                     c.showPage()
                     y = h - 50
+                    c.setFont('Helvetica-Bold', 12)
+                    c.drawString(50, y, "Datum      | Wochentag | A | B")
+                    y -= 20
+                    c.setFont('Helvetica', 10)
                 wd = weekdays[d.weekday()]
                 c.drawString(60, y, f"{d.isoformat()} ({wd}): {st}")
                 y -= 15

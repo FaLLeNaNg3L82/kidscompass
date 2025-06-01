@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from PySide6.QtCore import QThread, QCoreApplication, QEventLoop
-from kidscompass.ui import StatisticsWorker, BackupWorker, RestoreWorker, ExportWorker
+from kidscompass.ui import BackupWorker, RestoreWorker, ExportWorker
 from datetime import date
 from kidscompass.data import Database
 import os
@@ -63,51 +63,6 @@ def qapp():
     if app is None:
         app = QCoreApplication([])
     yield app
-
-# --- StatisticsWorker ---
-def test_statistics_worker_success(qapp, tmp_path):
-    dbfile = tmp_path / "test_stats.db"
-    db = Database(str(dbfile))
-    db.conn.execute("INSERT INTO visit_status (day, present_child_a, present_child_b) VALUES (?, ?, ?)", ("2023-01-01", 1, 1))
-    db.conn.execute("INSERT INTO visit_status (day, present_child_a, present_child_b) VALUES (?, ?, ?)", ("2023-01-02", 0, 1))
-    db.conn.commit()
-    db.conn.close()
-
-    start_date = date(2023, 1, 1)
-    end_date = date(2023, 1, 2)
-    weekdays = []  # Keine Einschränkung
-    status_filters = {}
-    worker = StatisticsWorker(str(dbfile), start_date, end_date, weekdays, status_filters)
-    results = []
-    errors = []
-    worker.finished.connect(lambda data: results.append(data))
-    worker.error.connect(errors.append)
-
-    worker.run()
-
-    assert results and len(results[0]) == 2
-    assert any(visit['day'] == date(2023, 1, 1) for visit in results[0])
-    assert any(visit['day'] == date(2023, 1, 2) for visit in results[0])
-    assert not errors
-
-def test_statistics_worker_failure(qapp, tmp_path):
-    dbfile = tmp_path / "test_stats.db"
-    db = Database(str(dbfile))
-
-    start_date = date(2023, 1, 1)
-    end_date = date(2023, 1, 2)
-    weekdays = []  # Keine Einschränkung
-    status_filters = {"invalid_field": "some_value"}  # Ungültiger Filter
-    worker = StatisticsWorker(str(dbfile), start_date, end_date, weekdays, status_filters)
-    results = []
-    errors = []
-    worker.finished.connect(lambda data: results.append(data))
-    worker.error.connect(errors.append)
-
-    worker.run()
-
-    # Check only for empty results since no error signal is emitted
-    assert results and results[0] == []
 
 # --- BackupWorker ---
 def test_backup_worker_success(qapp, tmp_path):
