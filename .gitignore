@@ -184,4 +184,5 @@ both.png
 kind_a.png
 kind_b.png
 kidscompass.db
-1.sql
+*.sql
+*.pdf
