@@ -910,13 +910,17 @@ class MainWindow(QMainWindow):
             f = qdate_to_date(self.tab1.ov_from.date())
             t = qdate_to_date(self.tab1.ov_to.date())
             if self.tab1.ov_add.isChecked():
-                pat = VisitPattern(list(range(7)),1,f)
-                ov  = OverridePeriod(f,t,pat)
+                # Override-Add: alle Tage im Zeitraum als Umgangstag
+                if t is None:
+                    t = f
+                pat = VisitPattern(list(range(7)), 1, f, t)
+                ov = OverridePeriod(f, t, pat)
             else:
-                ov  = RemoveOverride(f,t)
+                ov = RemoveOverride(f, t)
             self.db.save_override(ov)
             self.overrides.append(ov)
-            item = QListWidgetItem(str(ov)); item.setData(Qt.UserRole, ov)
+            item = QListWidgetItem(str(ov))
+            item.setData(Qt.UserRole, ov)
             self.tab1.entry_list.addItem(item)
         except Exception as e:
             logging.error(f"Fehler beim Hinzufügen des Overrides: {e}")
