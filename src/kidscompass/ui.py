@@ -683,11 +683,22 @@ class ExportWorker(QObject):
                 logging.error("[KidsCompass] Fehler: Start- und Enddatum fehlen im ExportWorker.")
                 return
             years = range(self.df.year, self.dt.year + 1)
-            all_planned = apply_overrides(
-                sum((generate_standard_days(p, year) for p in self.patterns for year in years), []),
-                self.overrides
-            )
-            planned = [d for d in all_planned if self.df <= d <= self.dt]
+            # Alle Standard-Tage (ohne Overrides)
+            all_planned = sum((generate_standard_days(p, year) for p in self.patterns for year in years), [])
+            # Nach Overrides bereinigt
+            planned = apply_overrides(all_planned, self.overrides)
+            planned = [d for d in planned if self.df <= d <= self.dt]
+
+            # Berechne, welche Standard-Tage durch Overrides entfernt wurden — aber
+            # zähle hier nur die, die durch echte RemoveOverride-Perioden entfernt wurden.
+            removed_by_any = set(all_planned) - set(planned)
+            removed_by_remove = set()
+            for ov in self.overrides:
+                if isinstance(ov, RemoveOverride):
+                    removed_by_remove.update({d for d in all_planned if ov.from_date <= d <= ov.to_date})
+            excluded_by_remove = len(removed_by_remove & removed_by_any)
+            excluded_days = sorted(list(removed_by_remove & removed_by_any))
+
             deviations = []
             for d in planned:
                 vs = self.visit_status.get(d, VisitStatus(day=d))

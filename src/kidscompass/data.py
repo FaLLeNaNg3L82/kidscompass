@@ -134,16 +134,21 @@ class Database:
                 # Lade zugehöriges Pattern
                 pcur = self.conn.cursor()
                 pcur.execute(
-                    "SELECT weekdays, interval_weeks, start_date, end_date FROM patterns WHERE id=?",
+                    "SELECT id, weekdays, interval_weeks, start_date, end_date FROM patterns WHERE id=?",
                     (row['pattern_id'],)
                 )
                 prow = pcur.fetchone()
-                wd = [int(x) for x in prow['weekdays'].split(',') if x]
-                start = date.fromisoformat(prow['start_date'])
-                end = date.fromisoformat(prow['end_date']) if prow['end_date'] else None
-                pat = VisitPattern(wd, prow['interval_weeks'], start, end)
-                pat.id = row['pattern_id']
-                ov = OverridePeriod(f, t, pat)
+                if prow:
+                    wd = [int(x) for x in prow['weekdays'].split(',') if x]
+                    start = date.fromisoformat(prow['start_date'])
+                    end = date.fromisoformat(prow['end_date']) if prow['end_date'] else None
+                    pat = VisitPattern(wd, prow['interval_weeks'], start, end)
+                    pat.id = prow['id']
+                    ov = OverridePeriod(f, t, pat)
+                else:
+                    # Falls Pattern nicht gefunden -> loggen und überspringen
+                    logging.warning(f"Override verweist auf fehlendes Pattern id={row['pattern_id']}")
+                    continue
             else:
                 ov = RemoveOverride(f, t)
             ov.id = row['id']
@@ -155,13 +160,15 @@ class Database:
         f_iso = ov.from_date.isoformat()
         t_iso = ov.to_date.isoformat()
         if isinstance(ov, OverridePeriod):
-            self.save_pattern(ov.pattern)
+            # Stelle sicher, dass das Pattern gespeichert ist und eine id hat
+            if getattr(ov.pattern, 'id', None) is None:
+                self.save_pattern(ov.pattern)
             pid = ov.pattern.id
             typ = 'add'
         else:
             pid = None
             typ = 'remove'
-        if hasattr(ov, 'id'):
+        if getattr(ov, 'id', None) is not None:
             cur.execute(
                 "UPDATE overrides SET type=?, from_date=?, to_date=?, pattern_id=? WHERE id=?",
                 (typ, f_iso, t_iso, pid, ov.id)
@@ -173,6 +180,12 @@ class Database:
             )
             ov.id = cur.lastrowid
         self.conn.commit()
+        # Debug: logge das gespeicherte Override
+        try:
+            cur.execute("SELECT * FROM overrides WHERE id=?", (ov.id,))
+            logging.debug(f"Saved override: {cur.fetchone()}")
+        except Exception:
+            pass
 
     def delete_override(self, override_id: int):
         cur = self.conn.cursor()

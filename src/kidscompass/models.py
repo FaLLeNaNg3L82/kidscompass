@@ -33,6 +33,11 @@ class RemoveOverride:
     from_date: date
     to_date: date
 
+    def __str__(self):
+        # Benutzerfreundliche Anzeige im UI
+        end = f" bis {self.to_date}" if self.to_date else ""
+        return f"Entfernen ({self.from_date}{end}) (id={self.id})"
+
 @dataclass
 class VisitStatus:
     """Status für jeden einzelnen Umgangstag."""
