@@ -25,6 +25,7 @@ class OverridePeriod:
     from_date: date
     to_date: date
     pattern: VisitPattern         # komplett frei definierbare Tage
+    holder: Optional[str] = None  # 'mother' or 'father' or None
 
 @dataclass
 class RemoveOverride:
