@@ -9,13 +9,11 @@ def test_import_vacations_csv(tmp_path):
 
     db = Database(str(tmp_path / 'vac.db'))
     created = db.import_vacations_from_csv(str(csv_fn), anchor_year=2025)
-    # Two vacations -> 4 halves => 4 overrides created
-    assert len(created) == 4
+    # mine_only default True -> one override per vacation (my portion only)
+    assert len(created) == 2
 
-    # Check holders alternate according to anchor year
+    # Check holder is set to 'mother' for imported my-days
     holders = [getattr(o, 'holder', None) for o in created]
-    # For 2025 anchor parity True -> first halves mother
-    assert holders[0] == 'mother'
-    assert holders[1] == 'father'
+    assert all(h == 'mother' for h in holders)
 
     db.close()

@@ -630,7 +630,7 @@ class Database:
 
         return {'old_updated': old_updated, 'new_pattern_id': new_id, 'message': 'Split durchgeführt.'}
 
-    def import_vacations_from_csv(self, filename: str, anchor_year: int = 2025):
+    def import_vacations_from_csv(self, filename: str, anchor_year: int = 2025, mine_only: bool = True):
         """
         Import simple CSV with columns: from_date, to_date, label (label optional).
         For each vacation range, split into two halves and create OverridePeriod entries
@@ -649,18 +649,92 @@ class Database:
                     label = row[2].strip() if len(row) > 2 else ''
                 except Exception:
                     continue
-                halves = self._split_into_halves(f0, t0)
+                # determine vacation type from label
+                import re, json
+                l = (label or '').lower()
+                if re.search(r'weihnacht', l):
+                    vac_type = 'weihnachten'
+                elif re.search(r'oster', l):
+                    vac_type = 'oster'
+                elif re.search(r'sommer', l):
+                    vac_type = 'sommer'
+                elif re.search(r'herbst', l):
+                    vac_type = 'herbst'
+                elif re.search(r'pfing', l):
+                    vac_type = 'pfingsten'
+                else:
+                    vac_type = 'unknown'
+
                 year = f0.year
-                first_holder, second_holder = self._holders_for_year_and_label(year, label, anchor_year)
-                # create override-adds covering each half: pattern = all weekdays
-                for (hf, ht), holder in zip(halves, (first_holder, second_holder)):
+                # decide assigned portion according to rules
+                parity_even = ((year - anchor_year) % 2 == 0)
+                # non-summer: anchor_year (2025) -> second, next year -> first, alternate
+                if vac_type != 'sommer':
+                    assigned = 'second' if parity_even else 'first'
+                    halves = self._split_into_halves(f0, t0)
+                    # pick the half that belongs to me (we import only my days)
+                    sel_idx = 1 if assigned == 'second' else 0
+                    hf, ht = halves[sel_idx]
+                    # handle very short ranges (1 day may fall into second half by split logic)
                     pat = VisitPattern(list(range(7)), 1, hf, ht)
-                    ov = OverridePeriod(hf, ht, pat, holder=holder)
+                    meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
+                    ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
                     self.save_override(ov)
                     created.append(ov)
+                else:
+                    # summer: exact 14-day rule
+                    total_days = (t0 - f0).days + 1
+                    if total_days >= 14:
+                        if parity_even:
+                            # anchor_year even parity -> last 14 days
+                            assigned = 'last_14'
+                            hf = t0 - _dt.timedelta(days=13)
+                            ht = t0
+                        else:
+                            assigned = 'first_14'
+                            hf = f0
+                            ht = f0 + _dt.timedelta(days=13)
+                        pat = VisitPattern(list(range(7)), 1, hf, ht)
+                        meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
+                        ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                        self.save_override(ov)
+                        created.append(ov)
+                    else:
+                        # short summer vacation: apply short-vacation rule
+                        if total_days < 2:
+                            # single day -> import that day (determine assigned half for metadata)
+                            halves = self._split_into_halves(f0, t0)
+                            # find which half contains the single day
+                            assigned = 'first' if (halves[0][0] <= f0 <= halves[0][1]) else 'second'
+                            hf = f0
+                            ht = f0
+                            pat = VisitPattern(list(range(7)), 1, hf, ht)
+                            meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
+                            ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                            self.save_override(ov)
+                            created.append(ov)
+                        elif total_days == 2:
+                            # split 1/1, pick according to parity
+                            halves = self._split_into_halves(f0, t0)
+                            assigned = 'second' if parity_even else 'first'
+                            sel_idx = 1 if assigned == 'second' else 0
+                            hf, ht = halves[sel_idx]
+                            pat = VisitPattern(list(range(7)), 1, hf, ht)
+                            meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
+                            ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                            self.save_override(ov)
+                            created.append(ov)
+                        else:
+                            # shorter than 14 but longer than 2 -> import entire vacation for mine_only
+                            assigned = 'entire'
+                            pat = VisitPattern(list(range(7)), 1, f0, t0)
+                            meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
+                            ov = OverridePeriod(f0, t0, pat, holder='mother', vac_type=vac_type, meta=meta)
+                            self.save_override(ov)
+                            created.append(ov)
         return created
 
-    def import_vacations_from_ics(self, filename: str, anchor_year: int = 2025):
+    def import_vacations_from_ics(self, filename: str, anchor_year: int = 2025, mine_only: bool = True):
         """
         Minimal ICS parser: extract VEVENT blocks with DTSTART/DTEND and SUMMARY (optional).
         Create overrides similar to CSV import.
@@ -716,26 +790,81 @@ class Database:
                     vac_type = 'sommer'
                 elif re.search(r'herbst', l):
                     vac_type = 'herbst'
+                elif re.search(r'pfing', l):
+                    # Pfingstferien / Pfingsten
+                    vac_type = 'pfingsten'
                 else:
                     vac_type = self._ask_vacation_type(label)
 
                 halves = self._split_into_halves(dtstart, dtend)
                 year = dtstart.year
-                first_holder, second_holder = self._holders_for_year_and_label(year, label, anchor_year)
+                parity_even = ((year - anchor_year) % 2 == 0)
 
-                # For Christmas, attach special metadata about handover times
-                for (hf, ht), holder, half_idx in zip(halves, (first_holder, second_holder), (0,1)):
-                    pat = VisitPattern(list(range(7)), 1, hf, ht)
+                # non-summer: assign first/second according to anchor_year parity (2025->second)
+                if vac_type != 'sommer':
+                    assigned = 'second' if parity_even else 'first'
+                    sel_idx = 1 if assigned == 'second' else 0
+                    hf, ht = halves[sel_idx]
                     meta = None
                     if vac_type == 'weihnachten':
-                        # First half: ends at first holiday 18:00, second half: until Jan 1 17:00
-                        if half_idx == 0:
-                            meta = json.dumps({'end_type':'first_holiday','end_time':'18:00','anchor_year':anchor_year})
+                        # attach special christmas metadata as before
+                        if assigned == 'first':
+                            meta = json.dumps({'end_type':'first_holiday','end_time':'18:00','anchor_year':anchor_year, 'assigned':assigned, 'year':year})
                         else:
-                            meta = json.dumps({'end_type':'jan1','end_time':'17:00','anchor_year':anchor_year})
-                    ov = OverridePeriod(hf, ht, pat, holder=holder, vac_type=vac_type, meta=meta)
+                            meta = json.dumps({'end_type':'jan1','end_time':'17:00','anchor_year':anchor_year, 'assigned':assigned, 'year':year})
+                    else:
+                        import json
+                        meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
+                    pat = VisitPattern(list(range(7)), 1, hf, ht)
+                    ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
                     self.save_override(ov)
                     created.append(ov)
+                else:
+                    # summer: exact 14-day rule
+                    total_days = (dtend - dtstart).days + 1
+                    if total_days >= 14:
+                        if parity_even:
+                            assigned = 'last_14'
+                            hf = dtend - _dt.timedelta(days=13)
+                            ht = dtend
+                        else:
+                            assigned = 'first_14'
+                            hf = dtstart
+                            ht = dtstart + _dt.timedelta(days=13)
+                        pat = VisitPattern(list(range(7)), 1, hf, ht)
+                        meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
+                        ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                        self.save_override(ov)
+                        created.append(ov)
+                    else:
+                        # short summer vacation
+                        if total_days < 2:
+                            halves = self._split_into_halves(dtstart, dtend)
+                            assigned = 'first' if (halves[0][0] <= dtstart <= halves[0][1]) else 'second'
+                            hf = dtstart
+                            ht = dtstart
+                            pat = VisitPattern(list(range(7)), 1, hf, ht)
+                            meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
+                            ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                            self.save_override(ov)
+                            created.append(ov)
+                        elif total_days == 2:
+                            halves = self._split_into_halves(dtstart, dtend)
+                            assigned = 'second' if parity_even else 'first'
+                            sel_idx = 1 if assigned == 'second' else 0
+                            hf, ht = halves[sel_idx]
+                            pat = VisitPattern(list(range(7)), 1, hf, ht)
+                            meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
+                            ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                            self.save_override(ov)
+                            created.append(ov)
+                        else:
+                            assigned = 'entire'
+                            pat = VisitPattern(list(range(7)), 1, dtstart, dtend)
+                            meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
+                            ov = OverridePeriod(dtstart, dtend, pat, holder='mother', vac_type=vac_type, meta=meta)
+                            self.save_override(ov)
+                            created.append(ov)
         return created
 
     def _split_into_halves(self, start: date, end: date):
