@@ -12,8 +12,8 @@ def test_import_vacations_csv(tmp_path):
     # mine_only default True -> one override per vacation (my portion only)
     assert len(created) == 2
 
-    # Check holder is set to 'mother' for imported my-days
+    # Check holder is set to 'father' for imported my-days
     holders = [getattr(o, 'holder', None) for o in created]
-    assert all(h == 'mother' for h in holders)
+    assert all(h == 'father' for h in holders)
 
     db.close()

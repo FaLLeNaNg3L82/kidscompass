@@ -678,7 +678,7 @@ class Database:
                     # handle very short ranges (1 day may fall into second half by split logic)
                     pat = VisitPattern(list(range(7)), 1, hf, ht)
                     meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
-                    ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                    ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
                     self.save_override(ov)
                     created.append(ov)
                 else:
@@ -696,7 +696,7 @@ class Database:
                             ht = f0 + _dt.timedelta(days=13)
                         pat = VisitPattern(list(range(7)), 1, hf, ht)
                         meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
-                        ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                        ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
                         self.save_override(ov)
                         created.append(ov)
                     else:
@@ -710,7 +710,7 @@ class Database:
                             ht = f0
                             pat = VisitPattern(list(range(7)), 1, hf, ht)
                             meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
-                            ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                            ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
                             self.save_override(ov)
                             created.append(ov)
                         elif total_days == 2:
@@ -721,7 +721,7 @@ class Database:
                             hf, ht = halves[sel_idx]
                             pat = VisitPattern(list(range(7)), 1, hf, ht)
                             meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
-                            ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                            ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
                             self.save_override(ov)
                             created.append(ov)
                         else:
@@ -729,7 +729,7 @@ class Database:
                             assigned = 'entire'
                             pat = VisitPattern(list(range(7)), 1, f0, t0)
                             meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
-                            ov = OverridePeriod(f0, t0, pat, holder='mother', vac_type=vac_type, meta=meta)
+                            ov = OverridePeriod(f0, t0, pat, holder='father', vac_type=vac_type, meta=meta)
                             self.save_override(ov)
                             created.append(ov)
         return created
@@ -816,7 +816,7 @@ class Database:
                         import json
                         meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
                     pat = VisitPattern(list(range(7)), 1, hf, ht)
-                    ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                    ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
                     self.save_override(ov)
                     created.append(ov)
                 else:
@@ -833,7 +833,7 @@ class Database:
                             ht = dtstart + _dt.timedelta(days=13)
                         pat = VisitPattern(list(range(7)), 1, hf, ht)
                         meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
-                        ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                        ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
                         self.save_override(ov)
                         created.append(ov)
                     else:
@@ -845,7 +845,7 @@ class Database:
                             ht = dtstart
                             pat = VisitPattern(list(range(7)), 1, hf, ht)
                             meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
-                            ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                            ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
                             self.save_override(ov)
                             created.append(ov)
                         elif total_days == 2:
@@ -855,14 +855,14 @@ class Database:
                             hf, ht = halves[sel_idx]
                             pat = VisitPattern(list(range(7)), 1, hf, ht)
                             meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
-                            ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                            ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
                             self.save_override(ov)
                             created.append(ov)
                         else:
                             assigned = 'entire'
                             pat = VisitPattern(list(range(7)), 1, dtstart, dtend)
                             meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
-                            ov = OverridePeriod(dtstart, dtend, pat, holder='mother', vac_type=vac_type, meta=meta)
+                            ov = OverridePeriod(dtstart, dtend, pat, holder='father', vac_type=vac_type, meta=meta)
                             self.save_override(ov)
                             created.append(ov)
         return created

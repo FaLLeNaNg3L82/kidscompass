@@ -19,7 +19,7 @@ def test_pfingsten_single_day_import(tmp_path):
     meta = json.loads(getattr(ov, 'meta'))
     # For a single-day vacation we import that day; assigned must be 'first' or 'second' depending on split
     assert meta['year'] == 2025
-    assert getattr(ov, 'holder', None) == 'mother'
+    assert getattr(ov, 'holder', None) == 'father'
     assert ov.from_date == date(2025,5,20)
     assert ov.to_date == date(2025,5,20)
     db.close()

@@ -25,7 +25,7 @@ Nächster Schritt (aufgetragen / in Arbeit):
 
 Technische Notizen:
 
-- Änderungen an Importfunktionen (CSV/ICS): mine_only=True als Default; OverridePeriod(s) nur für meinen Anteil (holder='mother'); meta enthält anchor_year, assigned ('first'|'second'|'first_14'|'last_14'|'entire'), year.
+- Änderungen an Importfunktionen (CSV/ICS): mine_only=True als Default; OverridePeriod(s) nur für meinen Anteil (holder='father'); meta enthält anchor_year, assigned ('first'|'second'|'first_14'|'last_14'|'entire'), year.
 - Kalender/Statistik: nur importierte Tage erscheinen als planned (keine kompletten Ferien mehr automatisch als Umgang).
 - Tests: neue Tests ergänzt (vacation_only_my_days, pfingsten short vacation). Alle Tests müssen lokal grün laufen.
 

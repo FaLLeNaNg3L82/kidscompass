@@ -19,7 +19,7 @@ def test_vacation_only_my_days_oster_and_sommer(tmp_path):
     assert getattr(ov, 'vac_type', None) == 'oster'
     meta = json.loads(getattr(ov, 'meta'))
     assert meta['assigned'] == 'second'
-    assert getattr(ov, 'holder', None) == 'mother'
+    assert getattr(ov, 'holder', None) == 'father'
 
     # Ostern 2026 -> I have the FIRST half
     ics2 = tmp_path / 'oster26.ics'
