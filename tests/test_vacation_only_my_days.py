@@ -39,7 +39,7 @@ def test_vacation_only_my_days_oster_and_sommer(tmp_path):
     meta3 = json.loads(getattr(ov3, 'meta'))
     assert meta3['assigned'] == 'last_14'
     # check dates: last 14 days -> end -13
-    assert ov3.from_date == date(2025,8,8)
+    assert ov3.from_date == date(2025,8,7)
     assert ov3.to_date == date(2025,8,20)
 
     # Sommer 2026 -> I have the FIRST 14 days
