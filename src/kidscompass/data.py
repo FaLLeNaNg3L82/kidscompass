@@ -690,21 +690,67 @@ def handover_day_counts(meta_json: str) -> bool:
                     vac_type = 'unknown'
 
                 year = f0.year
-                # decide assigned portion according to rules
                 parity_even = ((year - anchor_year) % 2 == 0)
-                # non-summer: anchor_year (2025) -> second, next year -> first, alternate
-                if vac_type != 'sommer':
+
+                # Special handling for Weihnachten in CSV import
+                if vac_type == 'weihnachten':
+                    # Special court-ruled case 2024/2025: two separate father blocks
+                    special_start = date(2024,12,20)
+                    special_mid_start = date(2025,1,4)
+                    special_mid_end = date(2025,1,7)
+                    if f0 <= special_start and t0 >= special_mid_end and year == 2024:
+                        b1_from = max(f0, special_start)
+                        b1_to = date(2024,12,25)
+                        meta1 = json.dumps({'anchor_year': anchor_year, 'assigned': 'special_2024_2025_block_1', 'year': 2024, 'handovers': [{'date':'2024-12-25','time':'18:00','role':'end'}]})
+                        pat1 = VisitPattern(list(range(7)), 1, b1_from, b1_to)
+                        ov1 = OverridePeriod(b1_from, b1_to, pat1, holder='father', vac_type='weihnachten', meta=meta1)
+                        self.save_override(ov1)
+                        created.append(ov1)
+
+                        b2_from = max(f0, special_mid_start)
+                        b2_to = min(t0, special_mid_end)
+                        meta2 = json.dumps({'anchor_year': anchor_year, 'assigned': 'special_2024_2025_block_2', 'year': 2025, 'handovers': [{'date':'2025-01-04','time':'10:00','role':'start'}], 'bring_to_school': {'date':'2025-01-04','time':'10:00'}})
+                        pat2 = VisitPattern(list(range(7)), 1, b2_from, b2_to)
+                        ov2 = OverridePeriod(b2_from, b2_to, pat2, holder='father', vac_type='weihnachten', meta=meta2)
+                        self.save_override(ov2)
+                        created.append(ov2)
+                        continue
+
+                    # General Christmas spanning new year: define phases
+                    if f0.year + 1 == t0.year:
+                        y = f0.year
+                        first_holiday = date(y,12,25)
+                        jan1 = date(y+1,1,1)
+                        phase_a_from = f0
+                        phase_a_to = first_holiday
+                        meta_a = json.dumps({'anchor_year': anchor_year, 'assigned': 'first', 'year': y, 'handovers': [{'date': first_holiday.isoformat(), 'time':'18:00', 'role':'end'}]})
+                        phase_b_from = first_holiday + _dt.timedelta(days=1)
+                        phase_b_to = jan1
+                        meta_b = json.dumps({'anchor_year': anchor_year, 'assigned': 'second', 'year': y, 'handovers': [{'date': jan1.isoformat(), 'time':'17:00', 'role':'end'}], 'bring_to_school': {'date': None, 'time':'10:00'}})
+                        father_phase = 'second' if parity_even else 'first'
+                        if father_phase == 'first':
+                            pat = VisitPattern(list(range(7)), 1, phase_a_from, phase_a_to)
+                            ov = OverridePeriod(phase_a_from, phase_a_to, pat, holder='father', vac_type='weihnachten', meta=meta_a)
+                            self.save_override(ov)
+                            created.append(ov)
+                        else:
+                            pat = VisitPattern(list(range(7)), 1, phase_b_from, phase_b_to)
+                            ov = OverridePeriod(phase_b_from, phase_b_to, pat, holder='father', vac_type='weihnachten', meta=meta_b)
+                            self.save_override(ov)
+                            created.append(ov)
+                        continue
+
+                    # fallback to halves if not cross-year
                     assigned = 'second' if parity_even else 'first'
                     halves = self._split_into_halves(f0, t0)
-                    # pick the half that belongs to me (we import only my days)
                     sel_idx = 1 if assigned == 'second' else 0
                     hf, ht = halves[sel_idx]
-                    # handle very short ranges (1 day may fall into second half by split logic)
                     pat = VisitPattern(list(range(7)), 1, hf, ht)
                     meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
                     ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
                     self.save_override(ov)
                     created.append(ov)
+                    continue
                 else:
                     # summer: exact 14-day rule
                     total_days = (t0 - f0).days + 1
@@ -820,29 +866,74 @@ def handover_day_counts(meta_json: str) -> bool:
                 else:
                     vac_type = self._ask_vacation_type(label)
 
-                halves = self._split_into_halves(dtstart, dtend)
                 year = dtstart.year
                 parity_even = ((year - anchor_year) % 2 == 0)
 
-                # non-summer: assign first/second according to anchor_year parity (2025->second)
-                if vac_type != 'sommer':
-                    assigned = 'second' if parity_even else 'first'
-                    sel_idx = 1 if assigned == 'second' else 0
-                    hf, ht = halves[sel_idx]
-                    meta = None
-                    if vac_type == 'weihnachten':
-                        # attach special christmas metadata as before
-                        if assigned == 'first':
-                            meta = json.dumps({'end_type':'first_holiday','end_time':'18:00','anchor_year':anchor_year, 'assigned':assigned, 'year':year})
+                # Special handling: Weihnachten
+                if vac_type == 'weihnachten':
+                    # Special court-ruled case 2024/2025: two separate father blocks
+                    special_start = date(2024,12,20)
+                    special_mid_start = date(2025,1,4)
+                    special_mid_end = date(2025,1,7)
+                    if dtstart <= special_start and dtend >= special_mid_end and year == 2024:
+                        # block 1: 2024-12-20 .. 2024-12-25 (handover 25.12 18:00)
+                        b1_from = max(dtstart, special_start)
+                        b1_to = date(2024,12,25)
+                        meta1 = json.dumps({'anchor_year': anchor_year, 'assigned': 'special_2024_2025_block_1', 'year': 2024, 'handovers': [{'date':'2024-12-25','time':'18:00','role':'end'}]})
+                        pat1 = VisitPattern(list(range(7)), 1, b1_from, b1_to)
+                        ov1 = OverridePeriod(b1_from, b1_to, pat1, holder='father', vac_type='weihnachten', meta=meta1)
+                        self.save_override(ov1)
+                        created.append(ov1)
+
+                        # block 2: 2025-01-04 .. 2025-01-07 (start 04.01 10:00 bring_to_school)
+                        b2_from = max(dtstart, special_mid_start)
+                        b2_to = min(dtend, special_mid_end)
+                        meta2 = json.dumps({'anchor_year': anchor_year, 'assigned': 'special_2024_2025_block_2', 'year': 2025, 'handovers': [{'date':'2025-01-04','time':'10:00','role':'start'}], 'bring_to_school': {'date':'2025-01-04','time':'10:00'}})
+                        pat2 = VisitPattern(list(range(7)), 1, b2_from, b2_to)
+                        ov2 = OverridePeriod(b2_from, b2_to, pat2, holder='father', vac_type='weihnachten', meta=meta2)
+                        self.save_override(ov2)
+                        created.append(ov2)
+                        continue
+
+                    # General christmas split across year: define two phases
+                    if dtstart.year + 1 == dtend.year:
+                        y = dtstart.year
+                        first_holiday = date(y,12,25)
+                        jan1 = date(y+1,1,1)
+                        # Phase A: dtstart -> first_holiday (handover 18:00)
+                        phase_a_from = dtstart
+                        phase_a_to = first_holiday
+                        meta_a = json.dumps({'anchor_year': anchor_year, 'assigned': 'first', 'year': y, 'handovers': [{'date': first_holiday.isoformat(), 'time':'18:00', 'role':'end'}]})
+                        # Phase B: day after first_holiday -> jan1 (handover 01.01 17:00)
+                        phase_b_from = first_holiday + _dt.timedelta(days=1)
+                        phase_b_to = jan1
+                        meta_b = json.dumps({'anchor_year': anchor_year, 'assigned': 'second', 'year': y, 'handovers': [{'date': jan1.isoformat(), 'time':'17:00', 'role':'end'}], 'bring_to_school': {'date': None, 'time':'10:00'}})
+
+                        # Decide which phase belongs to father per parity (anchor_year)
+                        # parity_even True => mother first, father second
+                        father_phase = 'second' if parity_even else 'first'
+                        if father_phase == 'first':
+                            pat = VisitPattern(list(range(7)), 1, phase_a_from, phase_a_to)
+                            ov = OverridePeriod(phase_a_from, phase_a_to, pat, holder='father', vac_type='weihnachten', meta=meta_a)
+                            self.save_override(ov)
+                            created.append(ov)
                         else:
-                            meta = json.dumps({'end_type':'jan1','end_time':'17:00','anchor_year':anchor_year, 'assigned':assigned, 'year':year})
-                    else:
-                        import json
-                        meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
+                            pat = VisitPattern(list(range(7)), 1, phase_b_from, phase_b_to)
+                            ov = OverridePeriod(phase_b_from, phase_b_to, pat, holder='father', vac_type='weihnachten', meta=meta_b)
+                            self.save_override(ov)
+                            created.append(ov)
+                        continue
+
+                    # If not a cross-year Christmas event, fallback to simple halves
+                    halves = self._split_into_halves(dtstart, dtend)
+                    sel_idx = 1 if parity_even else 0
+                    hf, ht = halves[sel_idx]
+                    meta = json.dumps({'anchor_year': anchor_year, 'assigned': 'second' if parity_even else 'first', 'year': year})
                     pat = VisitPattern(list(range(7)), 1, hf, ht)
-                    ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
+                    ov = OverridePeriod(hf, ht, pat, holder='father', vac_type='weihnachten', meta=meta)
                     self.save_override(ov)
                     created.append(ov)
+                    continue
                 else:
                     # summer: exact 14-day rule
                     total_days = (dtend - dtstart).days + 1
