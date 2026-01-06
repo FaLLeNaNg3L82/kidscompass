@@ -1,54 +1,86 @@
 import json
 from datetime import date
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from kidscompass.models import OverridePeriod, RemoveOverride
+
+
+_VAC_TYPE_NAMES = {
+    'weihnachten': 'Weihnachtsferien',
+    'sommer': 'Sommerferien',
+    'oster': 'Osterferien',
+    'herbst': 'Herbstferien',
+}
+
+
+def _ensure_meta(meta: Any) -> Optional[Dict]:
+    if not meta:
+        return None
+    if isinstance(meta, dict):
+        return meta
+    if isinstance(meta, str):
+        try:
+            return json.loads(meta)
+        except Exception:
+            return None
+    return None
 
 
 def format_visit_window(d: date, overrides: List, config: Optional[Dict] = None) -> str:
     """
-    Return a human-readable string describing special handover/metadata for date `d`.
-    Checks overrides covering `d` and uses `vac_type`/`meta` when available.
-    Config can contain `handover_rules` mapping.
+    Gib eine menschenlesbare Kurzbeschreibung zurück für besondere Übergabe-/Meta-Infos
+    an Datum `d`. Nutzt OverridePeriod.vac_type und OverridePeriod.meta (JSON oder dict).
+    `config` kann eine Mapping `handover_rules` enthalten, z.B. {'after_school': 'nach Schulende'}.
     """
     cfg = config or {}
-    hr = cfg.get('handover_rules', {})
+    hr = cfg.get('handover_rules', {}) or {}
 
-    # Find any add-override that covers the date
     for ov in overrides:
         if isinstance(ov, RemoveOverride):
             continue
-        if ov.from_date <= d <= ov.to_date:
-            # OverridePeriod
-            vt = getattr(ov, 'vac_type', None)
-            meta = getattr(ov, 'meta', None)
-            # try parse meta if JSON
-            m = None
-            if meta:
-                try:
-                    m = json.loads(meta)
-                except Exception:
-                    m = None
-            # Christmas special
-            if vt == 'weihnachten':
-                if m and m.get('end_type') == 'first_holiday':
-                    t = m.get('end_time', '18:00')
-                    return f"Weihnachtsferien: Übergabe am ersten Feiertag {t}"
-                if m and m.get('end_type') == 'jan1':
-                    t = m.get('end_time', '17:00')
-                    return f"Weihnachtsferien: Übergabe am 01.01 {t}"
-                # fallback
-                return "Weihnachtsferien"
+        if not (ov.from_date <= d <= ov.to_date):
+            continue
 
-            # Generic handover rule via meta.rule or vac_type mapping
-            if m and 'rule' in m:
-                rn = m['rule']
+        vt = getattr(ov, 'vac_type', None)
+        meta_raw = getattr(ov, 'meta', None)
+        m = _ensure_meta(meta_raw)
+
+        # Weihnachten: besondere Regeln (first_holiday / jan1)
+        if vt == 'weihnachten':
+            if m:
+                end_type = m.get('end_type') or m.get('anchor')
+                end_time = m.get('end_time') or m.get('time')
+                if end_type == 'first_holiday':
+                    t = end_time or '18:00'
+                    return f"Weihnachtsferien: Übergabe am ersten Feiertag {t}"
+                if end_type == 'jan1' or end_type == '01-01' or end_type == '01.01':
+                    t = end_time or '17:00'
+                    return f"Weihnachtsferien: Übergabe am 01.01 {t}"
+            # fallback label
+            return _VAC_TYPE_NAMES.get(vt, 'Weihnachtsferien')
+
+        # Generische Regel über meta.rule
+        if m and 'rule' in m:
+            rn = m.get('rule')
+            if rn in hr:
+                return f"Übergabe: {hr[rn]}"
+            # fixed time rules like 'fixed_18' or 'fixed_18:30'
+            if rn and rn.startswith('fixed_'):
+                # try to map via config first
                 if rn in hr:
                     return f"Übergabe: {hr[rn]}"
-                # fixed time
-                if rn.startswith('fixed_'):
-                    return f"Übergabe: {rn.split('_',1)[1]}"
+                # else take suffix as time
+                suffix = rn.split('_', 1)[1]
+                return f"Übergabe: {suffix}"
 
-            # Default: if vac_type present, show it
-            if vt:
-                return f"{vt.capitalize()}"
+        # Some imports might include direct handover_time or handover text
+        if m:
+            if 'handover_time' in m:
+                return f"Übergabe: {m.get('handover_time')}"
+            if 'handover' in m:
+                return f"Übergabe: {m.get('handover')}"
+
+        # If vac_type present, return localized name
+        if vt:
+            return _VAC_TYPE_NAMES.get(vt, vt.capitalize())
+
     return ""
