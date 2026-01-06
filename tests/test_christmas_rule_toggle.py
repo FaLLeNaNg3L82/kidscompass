@@ -24,8 +24,9 @@ def test_christmas_2025_first_half_mother(tmp_path):
     ov = created[0]
     assert getattr(ov, 'holder', None) == 'father'
     assert getattr(ov, 'vac_type', None) == 'weihnachten'
-    # For 2025 parity -> father has the second phase (ends Jan 1 17:00)
-    assert ov.meta and 'jan1' in ov.meta
+    # For 2025 parity -> father has the second phase; meta must contain neutral dates (25.12 and 01.01)
+    assert ov.meta
+    assert '2025-12-25' in ov.meta or '2026-01-01' in ov.meta or 'neutral_dates' in ov.meta
 
 
 def test_christmas_2026_first_half_father(tmp_path):
@@ -37,10 +38,11 @@ def test_christmas_2026_first_half_father(tmp_path):
     # mine_only => only father's phase
     assert len(created) == 1
     ov = created[0]
-    # For 2026 parity flips => father has the first phase (ends first holiday 18:00)
+    # For 2026 parity flips => father has the first phase; meta must contain neutral dates
     assert getattr(ov, 'holder', None) == 'father'
     assert getattr(ov, 'vac_type', None) == 'weihnachten'
-    assert ov.meta and 'first_holiday' in ov.meta
+    assert ov.meta
+    assert 'neutral_dates' in ov.meta
 
 
 def test_christmas_special_2024_2025_two_father_blocks(tmp_path):

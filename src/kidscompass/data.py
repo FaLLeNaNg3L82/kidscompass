@@ -14,6 +14,29 @@ import shutil
 import time
 import json
 
+# Policy for how to count days that contain a handover time (e.g. 25.12 18:00)
+# Options: 'neutral' (do not count for either parent), 'night_owner' (count for parent who has the night),
+# 'majority' (count for parent who has larger share of the day). Default: 'neutral' for judge-aligned fairness.
+HANDOVER_DAY_POLICY = 'neutral'
+
+def handover_day_counts(meta_json: str) -> bool:
+    """Decide whether a day marked as a handover (partial-day transfer) should be
+    counted as a planned/should-day for statistics.
+
+    Input: meta_json - JSON string or dict-like representing override.meta
+    Returns: True if the day should be counted for the holder, False if it should be neutral.
+    Current minimal policy: return False (neutral) for any handover-day.
+    """
+    try:
+        m = json.loads(meta_json) if isinstance(meta_json, str) and meta_json else (meta_json or {})
+    except Exception:
+        m = meta_json or {}
+    # Minimal policy: always neutral for days with explicit neutral_dates
+    if m and isinstance(m, dict) and m.get('neutral_dates'):
+        return False
+    # default: count
+    return True
+
 class Database:
     def __init__(self, db_path: str = None):
         try:
@@ -115,8 +138,8 @@ def handover_day_counts(meta_json: str) -> bool:
         m = json.loads(meta_json) if isinstance(meta_json, str) and meta_json else (meta_json or {})
     except Exception:
         m = meta_json or {}
-    # Minimal policy: always neutral for days with explicit handovers
-    if m and isinstance(m, dict) and m.get('handovers'):
+    # Minimal policy: always neutral for days with explicit neutral_dates
+    if m and isinstance(m, dict) and m.get('neutral_dates'):
         return False
     # default: count
     return True
@@ -700,16 +723,17 @@ def handover_day_counts(meta_json: str) -> bool:
                     special_mid_end = date(2025,1,7)
                     if f0 <= special_start and t0 >= special_mid_end and year == 2024:
                         b1_from = max(f0, special_start)
-                        b1_to = date(2024,12,25)
-                        meta1 = json.dumps({'anchor_year': anchor_year, 'assigned': 'special_2024_2025_block_1', 'year': 2024, 'handovers': [{'date':'2024-12-25','time':'18:00','role':'end'}]})
+                        b1_to = date(2024,12,24)
+                        meta1 = json.dumps({'anchor_year': anchor_year, 'assigned': 'special_2024_2025_block_1', 'year': 2024, 'neutral_dates': ['2024-12-25']})
                         pat1 = VisitPattern(list(range(7)), 1, b1_from, b1_to)
                         ov1 = OverridePeriod(b1_from, b1_to, pat1, holder='father', vac_type='weihnachten', meta=meta1)
                         self.save_override(ov1)
                         created.append(ov1)
 
-                        b2_from = max(f0, special_mid_start)
-                        b2_to = min(t0, special_mid_end)
-                        meta2 = json.dumps({'anchor_year': anchor_year, 'assigned': 'special_2024_2025_block_2', 'year': 2025, 'handovers': [{'date':'2025-01-04','time':'10:00','role':'start'}], 'bring_to_school': {'date':'2025-01-04','time':'10:00'}})
+                        # per day-based policy 04.01 is neutral, father gets 05-07
+                        b2_from = max(f0, date(2025,1,5))
+                        b2_to = min(t0, date(2025,1,7))
+                        meta2 = json.dumps({'anchor_year': anchor_year, 'assigned': 'special_2024_2025_block_2', 'year': 2025, 'neutral_dates': ['2025-01-04']})
                         pat2 = VisitPattern(list(range(7)), 1, b2_from, b2_to)
                         ov2 = OverridePeriod(b2_from, b2_to, pat2, holder='father', vac_type='weihnachten', meta=meta2)
                         self.save_override(ov2)
@@ -721,12 +745,13 @@ def handover_day_counts(meta_json: str) -> bool:
                         y = f0.year
                         first_holiday = date(y,12,25)
                         jan1 = date(y+1,1,1)
+                        # Day-based phases: 25.12 and 01.01 are neutral
                         phase_a_from = f0
-                        phase_a_to = first_holiday
-                        meta_a = json.dumps({'anchor_year': anchor_year, 'assigned': 'first', 'year': y, 'handovers': [{'date': first_holiday.isoformat(), 'time':'18:00', 'role':'end'}]})
-                        phase_b_from = first_holiday + _dt.timedelta(days=1)
-                        phase_b_to = jan1
-                        meta_b = json.dumps({'anchor_year': anchor_year, 'assigned': 'second', 'year': y, 'handovers': [{'date': jan1.isoformat(), 'time':'17:00', 'role':'end'}], 'bring_to_school': {'date': None, 'time':'10:00'}})
+                        phase_a_to = date(y,12,24)
+                        meta_a = json.dumps({'anchor_year': anchor_year, 'assigned': 'first', 'year': y, 'neutral_dates': [first_holiday.isoformat(), jan1.isoformat()]})
+                        phase_b_from = date(y,12,26)
+                        phase_b_to = date(y,12,31)
+                        meta_b = json.dumps({'anchor_year': anchor_year, 'assigned': 'second', 'year': y, 'neutral_dates': [first_holiday.isoformat(), jan1.isoformat()]})
                         father_phase = 'second' if parity_even else 'first'
                         if father_phase == 'first':
                             pat = VisitPattern(list(range(7)), 1, phase_a_from, phase_a_to)
@@ -876,19 +901,20 @@ def handover_day_counts(meta_json: str) -> bool:
                     special_mid_start = date(2025,1,4)
                     special_mid_end = date(2025,1,7)
                     if dtstart <= special_start and dtend >= special_mid_end and year == 2024:
-                        # block 1: 2024-12-20 .. 2024-12-25 (handover 25.12 18:00)
+                        # block 1: 2024-12-20 .. 2024-12-24 (25.12 neutral)
                         b1_from = max(dtstart, special_start)
-                        b1_to = date(2024,12,25)
-                        meta1 = json.dumps({'anchor_year': anchor_year, 'assigned': 'special_2024_2025_block_1', 'year': 2024, 'handovers': [{'date':'2024-12-25','time':'18:00','role':'end'}]})
+                        b1_to = date(2024,12,24)
+                        meta1 = json.dumps({'anchor_year': anchor_year, 'assigned': 'special_2024_2025_block_1', 'year': 2024, 'neutral_dates': ['2024-12-25']})
                         pat1 = VisitPattern(list(range(7)), 1, b1_from, b1_to)
                         ov1 = OverridePeriod(b1_from, b1_to, pat1, holder='father', vac_type='weihnachten', meta=meta1)
                         self.save_override(ov1)
                         created.append(ov1)
 
                         # block 2: 2025-01-04 .. 2025-01-07 (start 04.01 10:00 bring_to_school)
-                        b2_from = max(dtstart, special_mid_start)
-                        b2_to = min(dtend, special_mid_end)
-                        meta2 = json.dumps({'anchor_year': anchor_year, 'assigned': 'special_2024_2025_block_2', 'year': 2025, 'handovers': [{'date':'2025-01-04','time':'10:00','role':'start'}], 'bring_to_school': {'date':'2025-01-04','time':'10:00'}})
+                        # per day-based policy 04.01 is neutral, father gets 05-07
+                        b2_from = max(dtstart, date(2025,1,5))
+                        b2_to = min(dtend, date(2025,1,7))
+                        meta2 = json.dumps({'anchor_year': anchor_year, 'assigned': 'special_2024_2025_block_2', 'year': 2025, 'neutral_dates': ['2025-01-04']})
                         pat2 = VisitPattern(list(range(7)), 1, b2_from, b2_to)
                         ov2 = OverridePeriod(b2_from, b2_to, pat2, holder='father', vac_type='weihnachten', meta=meta2)
                         self.save_override(ov2)
@@ -900,14 +926,13 @@ def handover_day_counts(meta_json: str) -> bool:
                         y = dtstart.year
                         first_holiday = date(y,12,25)
                         jan1 = date(y+1,1,1)
-                        # Phase A: dtstart -> first_holiday (handover 18:00)
+                        # Day-based phases: 25.12 and 01.01 are neutral
                         phase_a_from = dtstart
-                        phase_a_to = first_holiday
-                        meta_a = json.dumps({'anchor_year': anchor_year, 'assigned': 'first', 'year': y, 'handovers': [{'date': first_holiday.isoformat(), 'time':'18:00', 'role':'end'}]})
-                        # Phase B: day after first_holiday -> jan1 (handover 01.01 17:00)
-                        phase_b_from = first_holiday + _dt.timedelta(days=1)
-                        phase_b_to = jan1
-                        meta_b = json.dumps({'anchor_year': anchor_year, 'assigned': 'second', 'year': y, 'handovers': [{'date': jan1.isoformat(), 'time':'17:00', 'role':'end'}], 'bring_to_school': {'date': None, 'time':'10:00'}})
+                        phase_a_to = date(y,12,24)
+                        meta_a = json.dumps({'anchor_year': anchor_year, 'assigned': 'first', 'year': y, 'neutral_dates': [first_holiday.isoformat(), jan1.isoformat()]})
+                        phase_b_from = date(y,12,26)
+                        phase_b_to = date(y,12,31)
+                        meta_b = json.dumps({'anchor_year': anchor_year, 'assigned': 'second', 'year': y, 'neutral_dates': [first_holiday.isoformat(), jan1.isoformat()]})
 
                         # Decide which phase belongs to father per parity (anchor_year)
                         # parity_even True => mother first, father second
