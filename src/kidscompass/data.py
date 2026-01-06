@@ -9,6 +9,9 @@ from pathlib import Path
 from kidscompass.models import VisitPattern, OverridePeriod, RemoveOverride, VisitStatus
 from kidscompass.calendar_logic import generate_standard_days
 import logging
+import re
+import shutil
+import time
 
 class Database:
     def __init__(self, db_path: str = None):
@@ -180,13 +183,22 @@ class Database:
             "SELECT id, weekdays, interval_weeks, start_date, end_date, label FROM patterns"
         )
         out = []
+        bad_ids = []
         for row in cur.fetchall():
-            wd = [int(x) for x in row['weekdays'].split(',') if x]
+            wk = row['weekdays'] or ''
+            # validate weekdays format: digits and commas only, e.g. '0,1,2'
+            if not re.match(r'^\d+(,\d+)*$', wk):
+                logging.warning(f"Invalid weekdays for pattern id={row['id']}: '{wk}' - skipping")
+                bad_ids.append(row['id'])
+                continue
+            wd = [int(x) for x in wk.split(',') if x]
             start = date.fromisoformat(row['start_date'])
             end = date.fromisoformat(row['end_date']) if row['end_date'] else None
             pat = VisitPattern(wd, row['interval_weeks'], start, end, label=row['label'] if 'label' in row.keys() else None)
             pat.id = row['id']
             out.append(pat)
+        if bad_ids:
+            logging.debug(f"load_patterns found invalid weekday rows: {bad_ids}")
         return out    
     def save_pattern(self, pat: VisitPattern):
         try:
@@ -429,8 +441,13 @@ class Database:
             if start_date is None and end_date is None:
                 out.append(dict(row))
                 continue
+            # Validate weekdays format
+            wk = row['weekdays'] or ''
+            if not re.match(r'^\d+(,\d+)*$', wk):
+                logging.warning(f"Skipping pattern id={pid} due to invalid weekdays='{wk}'")
+                continue
             # Build pattern and check if it produces dates in window
-            wd = [int(x) for x in row['weekdays'].split(',') if x]
+            wd = [int(x) for x in wk.split(',') if x]
             sd = date.fromisoformat(row['start_date'])
             ed = date.fromisoformat(row['end_date']) if row['end_date'] else None
             pat = VisitPattern(wd, row['interval_weeks'], sd, ed)
@@ -482,6 +499,62 @@ class Database:
         row = cur.fetchone()
         cur.close()
         return row
+
+    def find_bad_patterns(self) -> List[Dict]:
+        """Return list of rows from patterns that have invalid weekdays values."""
+        cur = self.conn.cursor()
+        cur.execute("SELECT id, weekdays FROM patterns")
+        bad = []
+        for row in cur.fetchall():
+            wk = row['weekdays'] or ''
+            if not re.match(r'^\d+(,\d+)*$', wk):
+                bad.append({'id': row['id'], 'weekdays': wk})
+        cur.close()
+        return bad
+
+    def repair_patterns_weekdays(self, action: str = 'quarantine') -> Dict:
+        """
+        Repair invalid patterns.weekdays entries.
+        action: 'quarantine' (move to bad_patterns) or 'delete' (remove rows).
+        Returns report: {'count': int, 'ids': [...], 'backup': path}
+        """
+        bad = self.find_bad_patterns()
+        if not bad:
+            return {'count': 0, 'ids': [], 'backup': None}
+
+        ts = time.strftime('%Y%m%d_%H%M%S')
+        backup = f"{self.db_path}.bak_weekdays_{ts}"
+        try:
+            shutil.copy2(self.db_path, backup)
+        except Exception as e:
+            logging.exception(f"Failed to create DB backup before repair: {e}")
+            raise
+
+        ids = [r['id'] for r in bad]
+        cur = self.conn.cursor()
+        try:
+            if action == 'quarantine':
+                # create bad_patterns table if not exists with same columns
+                cur.execute("CREATE TABLE IF NOT EXISTS bad_patterns AS SELECT * FROM patterns WHERE 0")
+                # insert rows into bad_patterns preserving id where possible
+                for r in bad:
+                    # fetch full row
+                    prow = self.conn.execute("SELECT * FROM patterns WHERE id=?", (r['id'],)).fetchone()
+                    if prow:
+                        cols = list(prow.keys())
+                        placeholders = ','.join('?' for _ in cols)
+                        values = [prow[c] for c in cols]
+                        cur.execute(f"INSERT INTO bad_patterns ({','.join(cols)}) VALUES ({placeholders})", values)
+            # delete from original table
+            cur.execute(f"DELETE FROM patterns WHERE id IN ({','.join('?' for _ in ids)})", ids)
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        finally:
+            cur.close()
+
+        return {'count': len(ids), 'ids': ids, 'backup': backup}
 
     def _find_pattern_by_key(self, weekdays_text: str, interval_weeks: int, start_date_iso: str, end_date_iso: str | None):
         cur = self.conn.cursor()
