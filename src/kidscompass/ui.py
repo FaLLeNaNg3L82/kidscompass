@@ -1391,6 +1391,23 @@ class MainWindow(QMainWindow):
     def load_config(self):
         self._mutex.lock()
         try:
+            # Detect invalid pattern rows before loading
+            bad = []
+            try:
+                bad = self.db.find_bad_patterns()
+            except Exception:
+                bad = []
+            if bad:
+                ids = [str(b['id']) for b in bad]
+                reply = QMessageBox.question(self, 'DB Repair', f"Die Datenbank enthält ungültige Pattern-Daten (ids={','.join(ids)}). Reparieren?", QMessageBox.Yes | QMessageBox.No)
+                if reply == QMessageBox.Yes:
+                    try:
+                        report = self.db.repair_patterns_weekdays()
+                        QMessageBox.information(self, 'Repair abgeschlossen', f"Repariert {report['count']} Einträge. Backup: {report['backup']}")
+                    except Exception as e:
+                        logging.exception('Repair failed: %s', e)
+                        QMessageBox.critical(self, 'Repair fehlgeschlagen', f'Fehler: {e}')
+                    # reload patterns from DB after repair
             self.patterns = self.db.load_patterns()
             self.tab1.entry_list.clear()
             for pat in self.patterns:
