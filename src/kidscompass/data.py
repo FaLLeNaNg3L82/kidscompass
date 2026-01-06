@@ -478,7 +478,7 @@ class Database:
 
     def _pattern_row(self, pattern_id: int):
         cur = self.conn.cursor()
-        cur.execute("SELECT id, weekdays, interval_weeks, start_date, end_date FROM patterns WHERE id=?", (pattern_id,))
+        cur.execute("SELECT id, weekdays, interval_weeks, start_date, end_date, label FROM patterns WHERE id=?", (pattern_id,))
         row = cur.fetchone()
         cur.close()
         return row
@@ -518,7 +518,10 @@ class Database:
                 wd_text = ','.join(str(d) for d in sorted(new_weekdays))
                 niw = new_interval_weeks if new_interval_weeks is not None else row['interval_weeks']
                 cur = self.conn.cursor()
-                cur.execute("UPDATE patterns SET weekdays=?, interval_weeks=?, start_date=? WHERE id=?", (wd_text, niw, split_date.isoformat(), pattern_id))
+                # Derive new label
+                old_label = row['label'] if 'label' in row.keys() else None
+                new_label = f"{old_label} (ab {split_date.isoformat()} geändert)" if old_label else f"Pattern (ab {split_date.isoformat()} geändert)"
+                cur.execute("UPDATE patterns SET weekdays=?, interval_weeks=?, start_date=?, label=? WHERE id=?", (wd_text, niw, split_date.isoformat(), new_label, pattern_id))
                 return {'old_updated': True, 'new_pattern_id': pattern_id, 'message': 'Pattern ersetzt (kein Split, da Split-Datum vor Start).'}
 
         # Normal split: set old end_date = split_date -1 if asked

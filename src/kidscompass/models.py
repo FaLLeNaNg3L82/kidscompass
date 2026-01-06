@@ -17,7 +17,10 @@ class VisitPattern:
         weekdays = [['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][d] for d in sorted(self.weekdays)]
         days = ', '.join(weekdays)
         end = f" bis {self.end_date}" if self.end_date else ""
-        return f"Alle {self.interval_weeks} Wochen an {days} (ab {self.start_date}{end})"
+        base = f"Alle {self.interval_weeks} Wochen an {days} (ab {self.start_date}{end})"
+        if self.label:
+            return f"[{self.label}] {base}"
+        return base
 
 @dataclass
 class OverridePeriod:

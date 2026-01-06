@@ -1509,10 +1509,14 @@ class MainWindow(QMainWindow):
                     if cand:
                         first = cand[0]
                         # If already annotated, append
+                        pid = getattr(p, 'id', None)
+                        lab = getattr(p, 'label', None)
+                        label_part = f"[{lab}] " if lab else ""
+                        text = f"{label_part}id={pid}"
                         if first in annotations:
-                            annotations[first] += f", id={getattr(p,'id',None)}"
+                            annotations[first] += f", {text}"
                         else:
-                            annotations[first] = f"id={getattr(p,'id',None)}"
+                            annotations[first] = text
             except Exception:
                 annotations = {}
             t3 = time.time()
