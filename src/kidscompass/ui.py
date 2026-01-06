@@ -1394,7 +1394,10 @@ class MainWindow(QMainWindow):
             self.patterns = self.db.load_patterns()
             self.tab1.entry_list.clear()
             for pat in self.patterns:
-                item = QListWidgetItem(str(pat)); item.setData(Qt.UserRole, pat)
+                display = str(pat)
+                if getattr(pat, 'label', None):
+                    display = f"[{pat.label}] {display}"
+                item = QListWidgetItem(display); item.setData(Qt.UserRole, pat)
                 self.tab1.entry_list.addItem(item)
             self.overrides = self.db.load_overrides()
             for ov in self.overrides:
@@ -1568,10 +1571,13 @@ class MainWindow(QMainWindow):
         from datetime import date
         # Weekend 14-day starting 2024-11-22 on Fr/Sa/So/Mo -> weekdays: Fr=4,Sa=5,So=6,Mo=0
         weekend = VisitPattern([4,5,6,0], interval_weeks=2, start_date=date(2024,11,22), end_date=None)
+        weekend.label = 'Wochenende (Urteil)'
         # Midweek until 31.12.2024: Wednesday (2)
         mid_2024 = VisitPattern([2], interval_weeks=1, start_date=date(2024,11,22), end_date=date(2024,12,31))
+        mid_2024.label = 'Mi bis 31.12.2024'
         # Midweek from 01.01.2025: Tuesday+Wednesday
         mid_2025 = VisitPattern([1,2], interval_weeks=1, start_date=date(2025,1,1), end_date=None)
+        mid_2025.label = 'Di+Mi ab 01.01.2025'
 
         for p in (weekend, mid_2024, mid_2025):
             try:
