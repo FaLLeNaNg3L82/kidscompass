@@ -838,6 +838,8 @@ class ExportWorker(QObject):
             from reportlab.lib.styles import getSampleStyleSheet
             from reportlab.lib import colors
             import tempfile
+            from kidscompass.export_utils import format_visit_window
+            import json
             doc = SimpleDocTemplate(self.out_fn, pagesize=letter)
             styles = getSampleStyleSheet()
             elements = []
@@ -880,6 +882,28 @@ class ExportWorker(QObject):
                 ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
             ]))
             elements.append(t)
+            elements.append(Spacer(1, 24))
+            # --- Tabelle mit geplanten Terminen inkl. Meta/Handover-Text ---
+            elements.append(Paragraph("<b>Geplante Termine (mit Metadaten)</b>", styles['Heading2']))
+            elements.append(Spacer(1, 6))
+            table_meta = [["Datum", "Wochentag", "Status", "Hinweis"]]
+            weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+            for d in planned:
+                vs = self.visit_status.get(d, VisitStatus(d))
+                st = (
+                    "Alle da" if vs.present_child_a and vs.present_child_b else
+                    ("Beide fehlen" if not vs.present_child_a and not vs.present_child_b else
+                     ("Amilia fehlt" if not vs.present_child_a else "Malia fehlt"))
+                )
+                hint = format_visit_window(d, self.overrides, None)
+                table_meta.append([d.isoformat(), weekdays[d.weekday()], st, hint])
+            tm = Table(table_meta, repeatRows=1)
+            tm.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ]))
+            elements.append(tm)
             elements.append(Spacer(1, 24))
             # Kuchendiagramme als Images oben platzieren, nur wenn total > 0
             elements.append(Paragraph("<b>Kuchendiagramme</b>", styles['Heading2']))
