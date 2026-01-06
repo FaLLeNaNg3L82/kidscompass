@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QCalendarWidget, QCheckBox, QPushButton, QLabel,
     QSpinBox, QListWidget, QListWidgetItem, QMessageBox, QDateEdit,
     QComboBox, QGroupBox, QRadioButton, QGridLayout, QTextEdit, QFileDialog,
-    QDialog, QDialogButtonBox
+    QDialog, QDialogButtonBox, QLineEdit
 )
 from PySide6.QtWidgets import QListView, QAbstractItemView
 from PySide6.QtGui import QTextCharFormat, QBrush, QColor
@@ -25,6 +25,7 @@ from PySide6.QtCore import Qt, QDate, QThread, Signal, QObject, QMutex, QTimer
 from PySide6.QtGui import QPainter, QFont
 from kidscompass.calendar_logic import generate_standard_days, apply_overrides
 from kidscompass.data import Database
+from kidscompass import config as kc_config
 from kidscompass.statistics import count_missing_by_weekday, summarize_visits, calculate_trends
 import matplotlib.pyplot as plt
 from PySide6.QtWidgets import QLabel
@@ -195,6 +196,26 @@ class SettingsTab(QWidget):
         btns.addWidget(self.btn_split_pattern)
         layout.addLayout(btns)
 
+        # --- Handover rules minimal UI ---
+        gb = QGroupBox('Übergabe-Regeln')
+        gbl = QGridLayout()
+        gb.setLayout(gbl)
+        gbl.addWidget(QLabel('nach Schulende (after_school):'), 0, 0)
+        self.h_after_school = QLineEdit()
+        gbl.addWidget(self.h_after_school, 0, 1)
+        gbl.addWidget(QLabel('zum Schulbeginn (school_start):'), 1, 0)
+        self.h_school_start = QLineEdit()
+        gbl.addWidget(self.h_school_start, 1, 1)
+        gbl.addWidget(QLabel('fixed_18 (Label für fixed_18):'), 2, 0)
+        self.h_fixed_18 = QLineEdit()
+        gbl.addWidget(self.h_fixed_18, 2, 1)
+        self.btn_save_config = QPushButton('Handover-Regeln speichern')
+        gbl.addWidget(self.btn_save_config, 3, 0, 1, 2)
+        layout.addWidget(gb)
+
+        # Signals for config save
+        self.btn_save_config.clicked.connect(self._on_save_config)
+
         # Signale
         self.btn_pattern.clicked.connect(self.parent.on_add_pattern)
         self.btn_override.clicked.connect(self.parent.on_add_override)
@@ -204,6 +225,21 @@ class SettingsTab(QWidget):
         self.btn_reset_plan.clicked.connect(self.parent.on_reset_plan)
         self.btn_import_vac.clicked.connect(self.parent.on_import_vacations)
         self.btn_split_pattern.clicked.connect(self.parent.on_split_pattern)
+
+    def _on_save_config(self):
+        cfg = getattr(self.parent, 'config', {}) or {}
+        hr = cfg.get('handover_rules', {})
+        hr['after_school'] = self.h_after_school.text() or hr.get('after_school', 'nach Schulende')
+        hr['school_start'] = self.h_school_start.text() or hr.get('school_start', 'zum Schulbeginn')
+        hr['fixed_18'] = self.h_fixed_18.text() or hr.get('fixed_18', '18:00')
+        cfg['handover_rules'] = hr
+        self.parent.config = cfg
+        try:
+            kc_config.save_config(cfg)
+            QMessageBox.information(self, 'Einstellungen', 'Handover-Regeln gespeichert')
+        except Exception as e:
+            logging.exception(f'Fehler beim Speichern der Config: {e}')
+            QMessageBox.critical(self, 'Fehler', f'Config konnte nicht gespeichert werden: {e}')
 
 class StatusTab(QWidget):
     def __init__(self, parent):
@@ -895,7 +931,12 @@ class ExportWorker(QObject):
                     ("Beide fehlen" if not vs.present_child_a and not vs.present_child_b else
                      ("Amilia fehlt" if not vs.present_child_a else "Malia fehlt"))
                 )
-                hint = format_visit_window(d, self.overrides, None)
+                # pass configured handover rules mapping from main window
+                cfg = getattr(self.parent, 'config', None) if hasattr(self, 'parent') else None
+                # ExportWorker has parent attribute pointing to MainWindow
+                if cfg is None and hasattr(self, 'parent') and hasattr(self.parent, 'config'):
+                    cfg = self.parent.config
+                hint = format_visit_window(d, self.overrides, cfg)
                 table_meta.append([d.isoformat(), weekdays[d.weekday()], st, hint])
             tm = Table(table_meta, repeatRows=1)
             tm.setStyle(TableStyle([
@@ -1317,6 +1358,11 @@ class MainWindow(QMainWindow):
         self.patterns = []
         self.overrides = []
         self.visit_status = self.db.load_all_status()
+        # Load app config (handover rules etc.)
+        try:
+            self.config = kc_config.load_config()
+        except Exception:
+            self.config = {'handover_rules': {}}
 
         # Mutex für thread-safe Zugriff
         self._mutex = QMutex()
@@ -1354,6 +1400,15 @@ class MainWindow(QMainWindow):
             for ov in self.overrides:
                 item = QListWidgetItem(str(ov)); item.setData(Qt.UserRole, ov)
                 self.tab1.entry_list.addItem(item)
+            # Populate settings UI with config values if available
+            try:
+                hr = self.config.get('handover_rules', {})
+                if hasattr(self.tab1, 'h_after_school'):
+                    self.tab1.h_after_school.setText(hr.get('after_school', ''))
+                    self.tab1.h_school_start.setText(hr.get('school_start', ''))
+                    self.tab1.h_fixed_18.setText(hr.get('fixed_18', ''))
+            except Exception:
+                pass
         finally:
             self._mutex.unlock()
 
