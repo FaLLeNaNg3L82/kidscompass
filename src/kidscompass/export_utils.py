@@ -9,6 +9,7 @@ _VAC_TYPE_NAMES = {
     'sommer': 'Sommerferien',
     'oster': 'Osterferien',
     'herbst': 'Herbstferien',
+    'pfingsten': 'Pfingstferien',
 }
 
 

@@ -22,6 +22,7 @@ def test_ics_detection_all_types(tmp_path):
     cases = [
         ('Weihnachtsferien', 'weihnachten'),
         ('Osterferien', 'oster'),
+        ('Pfingstferien', 'pfingsten'),
         ('Sommerferien', 'sommer'),
         ('Herbstferien', 'herbst'),
     ]

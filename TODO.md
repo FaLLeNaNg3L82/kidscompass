@@ -30,3 +30,46 @@ Technische Notizen:
 - Tests: neue Tests ergänzt (vacation_only_my_days, pfingsten short vacation). Alle Tests müssen lokal grün laufen.
 
 Wenn die Änderungen getestet und committet sind, erstelle ich den PR-Branch und pushe die Änderungen.
+
+
+RUNBOOK:
+# KidsCompass – Next Steps (Runbook)
+
+# 0) Setup / sanity
+git status
+git branch --show-current
+python -V
+
+# 1) Ostern/Herbst day-based split (Commit D)
+# - switch_day = first Sunday on/after (start_date + 6 days)
+# - Sunday = neutral (not planned)
+# - Phase A: start..Saturday
+# - Phase B: Monday..end
+# - mine_only=True => only father override
+# - Update/extend tests for these rules
+python -m pytest -q
+
+# 2) Sommer-Regel vereinfachen (Commit E)
+# - 2025: last 14 days
+# - 2026: first 14 days
+# - alternating thereafter
+# - No times, no Sa/So anchoring, day-based only
+python -m pytest -q
+
+# 3) Short-vacation rules 1–2 days (Commit F)
+# - 1 day: that day (mine_only)
+# - 2 days: 1/1 split by parity
+python -m pytest -q
+
+# 4) “Ignorieren/Neutralisieren”-Feature (Excluded days) (Commit G)
+# - Add excluded_days table + UI button
+# - Excluded days removed from planned/stats/export
+python -m pytest -q
+
+# 5) Full regression + cleanup
+python -m pytest -q
+git status
+
+# 6) PR erstellen
+# base: main
+# head: fix/holiday-and-planned-logic
