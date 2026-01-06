@@ -26,6 +26,8 @@ class OverridePeriod:
     to_date: date
     pattern: VisitPattern         # komplett frei definierbare Tage
     holder: Optional[str] = None  # 'mother' or 'father' or None
+    vac_type: Optional[str] = None  # detected vacation type: 'weihnachten','oster','sommer','herbst','unknown'
+    meta: Optional[str] = None  # JSON/text metadata (e.g. handover times)
 
 @dataclass
 class RemoveOverride:

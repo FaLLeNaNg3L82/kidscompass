@@ -54,6 +54,8 @@ class Database:
           to_date TEXT NOT NULL,
           pattern_id INTEGER,
           holder TEXT,
+                    vac_type TEXT,
+                    meta TEXT,
           FOREIGN KEY(pattern_id) REFERENCES patterns(id)
         )""")
 
@@ -73,6 +75,16 @@ class Database:
         if 'holder' not in cols:
             try:
                 cur.execute("ALTER TABLE overrides ADD COLUMN holder TEXT")
+            except Exception:
+                pass
+        if 'vac_type' not in cols:
+            try:
+                cur.execute("ALTER TABLE overrides ADD COLUMN vac_type TEXT")
+            except Exception:
+                pass
+        if 'meta' not in cols:
+            try:
+                cur.execute("ALTER TABLE overrides ADD COLUMN meta TEXT")
             except Exception:
                 pass
             self.conn.commit()
@@ -242,7 +254,9 @@ class Database:
                     end = date.fromisoformat(prow['end_date']) if prow['end_date'] else None
                     pat = VisitPattern(wd, prow['interval_weeks'], start, end)
                     pat.id = prow['id']
-                    ov = OverridePeriod(f, t, pat, holder=row['holder'] if 'holder' in row.keys() else None)
+                    ov = OverridePeriod(f, t, pat, holder=row['holder'] if 'holder' in row.keys() else None,
+                                         vac_type=row['vac_type'] if 'vac_type' in row.keys() else None,
+                                         meta=row['meta'] if 'meta' in row.keys() else None)
                 else:
                     # Falls Pattern nicht gefunden -> loggen und überspringen
                     logging.warning(f"Override verweist auf fehlendes Pattern id={row['pattern_id']}")
@@ -267,15 +281,17 @@ class Database:
             pid = None
             typ = 'remove'
         holder = getattr(ov, 'holder', None) if isinstance(ov, OverridePeriod) else None
+        vac_type = getattr(ov, 'vac_type', None) if isinstance(ov, OverridePeriod) else None
+        meta = getattr(ov, 'meta', None) if isinstance(ov, OverridePeriod) else None
         if getattr(ov, 'id', None) is not None:
             cur.execute(
-                "UPDATE overrides SET type=?, from_date=?, to_date=?, pattern_id=?, holder=? WHERE id=?",
-                (typ, f_iso, t_iso, pid, holder, ov.id)
+                "UPDATE overrides SET type=?, from_date=?, to_date=?, pattern_id=?, holder=?, vac_type=?, meta=? WHERE id=?",
+                (typ, f_iso, t_iso, pid, holder, vac_type, meta, ov.id)
             )
         else:
             cur.execute(
-                "INSERT INTO overrides (type, from_date, to_date, pattern_id, holder) VALUES (?,?,?,?,?)",
-                (typ, f_iso, t_iso, pid, holder)
+                "INSERT INTO overrides (type, from_date, to_date, pattern_id, holder, vac_type, meta) VALUES (?,?,?,?,?,?,?)",
+                (typ, f_iso, t_iso, pid, holder, vac_type, meta)
             )
             ov.id = cur.lastrowid
         self.conn.commit()
@@ -581,8 +597,8 @@ class Database:
                     if len(parts) > 1:
                         val = parts[-1]
                         try:
-                            if len(val) == 8:
-                                dtstart = date.fromisoformat(val)
+                            if len(val) == 8 and val.isdigit():
+                                dtstart = date(int(val[0:4]), int(val[4:6]), int(val[6:8]))
                             else:
                                 dtstart = date.fromisoformat(val[:10])
                         except Exception:
@@ -592,8 +608,8 @@ class Database:
                     if len(parts) > 1:
                         val = parts[-1]
                         try:
-                            if len(val) == 8:
-                                dtend = date.fromisoformat(val)
+                            if len(val) == 8 and val.isdigit():
+                                dtend = date(int(val[0:4]), int(val[4:6]), int(val[6:8]))
                             else:
                                 dtend = date.fromisoformat(val[:10])
                         except Exception:
@@ -603,12 +619,36 @@ class Database:
                     if len(parts) > 1:
                         label = parts[1].strip()
             if dtstart and dtend:
+                # Detect vacation type from SUMMARY
+                import re, json
+                l = (label or '').lower()
+                vac_type = None
+                if re.search(r'weihnacht', l):
+                    vac_type = 'weihnachten'
+                elif re.search(r'oster', l):
+                    vac_type = 'oster'
+                elif re.search(r'sommer', l):
+                    vac_type = 'sommer'
+                elif re.search(r'herbst', l):
+                    vac_type = 'herbst'
+                else:
+                    vac_type = self._ask_vacation_type(label)
+
                 halves = self._split_into_halves(dtstart, dtend)
                 year = dtstart.year
                 first_holder, second_holder = self._holders_for_year_and_label(year, label, anchor_year)
-                for (hf, ht), holder in zip(halves, (first_holder, second_holder)):
+
+                # For Christmas, attach special metadata about handover times
+                for (hf, ht), holder, half_idx in zip(halves, (first_holder, second_holder), (0,1)):
                     pat = VisitPattern(list(range(7)), 1, hf, ht)
-                    ov = OverridePeriod(hf, ht, pat, holder=holder)
+                    meta = None
+                    if vac_type == 'weihnachten':
+                        # First half: ends at first holiday 18:00, second half: until Jan 1 17:00
+                        if half_idx == 0:
+                            meta = json.dumps({'end_type':'first_holiday','end_time':'18:00','anchor_year':anchor_year})
+                        else:
+                            meta = json.dumps({'end_type':'jan1','end_time':'17:00','anchor_year':anchor_year})
+                    ov = OverridePeriod(hf, ht, pat, holder=holder, vac_type=vac_type, meta=meta)
                     self.save_override(ov)
                     created.append(ov)
         return created
@@ -633,6 +673,41 @@ class Database:
         if parity:
             return 'mother', 'father'
         return 'father', 'mother'
+
+    def _ask_vacation_type(self, label: str) -> str:
+        """
+        Ask the user to classify a vacation when import cannot decide.
+        If running headless (no QApplication), return 'unknown'.
+        """
+        try:
+            from PySide6.QtWidgets import QApplication, QMessageBox
+            app = QApplication.instance()
+            if app is None:
+                return 'unknown'
+            # Present dialog
+            opts = ['Weihnachten', 'Ostern', 'Sommer', 'Herbst', 'Unbekannt']
+            msg = QMessageBox()
+            msg.setWindowTitle('Welche Ferienart ist das?')
+            msg.setText(f'Ferienbeschreibung: "{label}"\nWelche Ferienart ist das?')
+            buttons = []
+            for o in opts:
+                buttons.append(msg.addButton(o, QMessageBox.ActionRole))
+            msg.exec()
+            btn = msg.clickedButton()
+            if btn:
+                idx = buttons.index(btn)
+                choice = opts[idx]
+                if choice == 'Weihnachten':
+                    return 'weihnachten'
+                if choice == 'Ostern':
+                    return 'oster'
+                if choice == 'Sommer':
+                    return 'sommer'
+                if choice == 'Herbst':
+                    return 'herbst'
+                return 'unknown'
+        except Exception:
+            return 'unknown'
 
     def remove_duplicate_patterns(self, keep_first=True) -> int:
         """
