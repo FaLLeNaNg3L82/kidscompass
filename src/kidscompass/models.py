@@ -11,6 +11,7 @@ class VisitPattern:
     interval_weeks: int = 1       # Alle X Wochen
     start_date: date = field(default_factory=date.today)
     end_date: Optional[date] = None
+    label: Optional[str] = None
 
     def __str__(self):
         weekdays = [['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][d] for d in sorted(self.weekdays)]

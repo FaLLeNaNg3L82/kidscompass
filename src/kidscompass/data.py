@@ -44,6 +44,11 @@ class Database:
         cols = [row['name'] for row in cur.fetchall()]
         if 'end_date' not in cols:
             cur.execute("ALTER TABLE patterns ADD COLUMN end_date TEXT")
+        if 'label' not in cols:
+            try:
+                cur.execute("ALTER TABLE patterns ADD COLUMN label TEXT")
+            except Exception:
+                pass
 
         # Overrides: Add und Remove mit Referenz auf patterns
         cur.execute("""
@@ -172,14 +177,14 @@ class Database:
     def load_patterns(self):
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT id, weekdays, interval_weeks, start_date, end_date FROM patterns"
+            "SELECT id, weekdays, interval_weeks, start_date, end_date, label FROM patterns"
         )
         out = []
         for row in cur.fetchall():
             wd = [int(x) for x in row['weekdays'].split(',') if x]
             start = date.fromisoformat(row['start_date'])
             end = date.fromisoformat(row['end_date']) if row['end_date'] else None
-            pat = VisitPattern(wd, row['interval_weeks'], start, end)
+            pat = VisitPattern(wd, row['interval_weeks'], start, end, label=row['label'] if 'label' in row.keys() else None)
             pat.id = row['id']
             out.append(pat)
         return out    
@@ -188,6 +193,7 @@ class Database:
             wd_text = ','.join(str(d) for d in pat.weekdays)
             sd = pat.start_date.isoformat()
             ed = pat.end_date.isoformat() if pat.end_date else None
+            lab = getattr(pat, 'label', None)
             cur = self.conn.cursor()
             # Prevent duplicate inserts: check for existing identical pattern
             if getattr(pat, 'id', None) is None:
@@ -208,14 +214,14 @@ class Database:
                     return
             if getattr(pat, 'id', None) is not None:
                 cur.execute(
-                    "UPDATE patterns SET weekdays=?, interval_weeks=?, start_date=?, end_date=? WHERE id=?",
-                    (wd_text, pat.interval_weeks, sd, ed, pat.id)
+                    "UPDATE patterns SET weekdays=?, interval_weeks=?, start_date=?, end_date=?, label=? WHERE id=?",
+                    (wd_text, pat.interval_weeks, sd, ed, lab, pat.id)
                 )
                 print(f"Updated pattern id={pat.id}")
             else:
                 cur.execute(
-                    "INSERT INTO patterns (weekdays, interval_weeks, start_date, end_date) VALUES (?,?,?,?)",
-                    (wd_text, pat.interval_weeks, sd, ed)
+                    "INSERT INTO patterns (weekdays, interval_weeks, start_date, end_date, label) VALUES (?,?,?,?,?)",
+                    (wd_text, pat.interval_weeks, sd, ed, lab)
                 )
                 pat.id = cur.lastrowid
                 print(f"Inserted new pattern with id={pat.id}")
@@ -537,7 +543,10 @@ class Database:
                     new_id = existing
                 else:
                     # Insert new pattern with start_date=split_date and end_date = old_end_iso
-                    cur.execute("INSERT INTO patterns (weekdays, interval_weeks, start_date, end_date) VALUES (?,?,?,?)", (wd_text_new, niw, split_date.isoformat(), old_end_iso))
+                    # Derive label from old pattern if present
+                    old_label = row['label'] if 'label' in row.keys() else None
+                    new_label = f"{old_label} (ab {split_date.isoformat()} geändert)" if old_label else None
+                    cur.execute("INSERT INTO patterns (weekdays, interval_weeks, start_date, end_date, label) VALUES (?,?,?,?,?)", (wd_text_new, niw, split_date.isoformat(), old_end_iso, new_label))
                     new_id = cur.lastrowid
         except Exception as e:
             # Any error triggers rollback automatically via context manager
