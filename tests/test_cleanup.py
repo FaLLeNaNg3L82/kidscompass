@@ -1,0 +1,42 @@
+import tempfile
+import os
+import sqlite3
+from pathlib import Path
+from datetime import date
+
+from kidscompass.data import Database
+
+
+def test_find_and_remove_duplicates(tmp_path):
+    db_path = tmp_path / 'dup.db'
+    db = Database(str(db_path))
+    # Insert duplicate rows directly to simulate legacy duplicates
+    cur = db.conn.cursor()
+    # weekdays stored as text
+    cur.execute("INSERT INTO patterns (weekdays, interval_weeks, start_date, end_date) VALUES (?,?,?,?)", ('4,5,6', 2, '2024-11-22', None))
+    cur.execute("INSERT INTO patterns (weekdays, interval_weeks, start_date, end_date) VALUES (?,?,?,?)", ('4,5,6', 2, '2024-11-22', None))
+    cur.execute("INSERT INTO patterns (weekdays, interval_weeks, start_date, end_date) VALUES (?,?,?,?)", ('1,2', 1, '2025-01-01', None))
+    db.conn.commit()
+
+    # Add an override referencing one of the duplicate patterns to ensure FK path exists
+    cur.execute("SELECT id FROM patterns WHERE weekdays=? LIMIT 1", ('4,5,6',))
+    pid = cur.fetchone()['id']
+    cur.execute("INSERT INTO overrides (type, from_date, to_date, pattern_id) VALUES (?,?,?,?)", ('add', '2025-04-01', '2025-04-10', pid))
+    db.conn.commit()
+
+    dups = db.find_duplicate_patterns()
+    assert any(len(g) > 1 for g in dups)
+
+    res = db.remove_duplicate_patterns()
+    # API may return tuple (removed, updated) or int
+    if isinstance(res, tuple):
+        removed = res[0]
+    else:
+        removed = res
+    assert removed >= 1
+
+    # After removal, no duplicate groups
+    dups2 = db.find_duplicate_patterns()
+    assert all(len(g) == 1 for g in dups2) or not dups2
+
+    db.close()

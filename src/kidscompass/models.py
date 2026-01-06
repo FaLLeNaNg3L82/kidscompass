@@ -11,12 +11,16 @@ class VisitPattern:
     interval_weeks: int = 1       # Alle X Wochen
     start_date: date = field(default_factory=date.today)
     end_date: Optional[date] = None
+    label: Optional[str] = None
 
     def __str__(self):
         weekdays = [['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'][d] for d in sorted(self.weekdays)]
         days = ', '.join(weekdays)
         end = f" bis {self.end_date}" if self.end_date else ""
-        return f"Alle {self.interval_weeks} Wochen an {days} (ab {self.start_date}{end})"
+        base = f"Alle {self.interval_weeks} Wochen an {days} (ab {self.start_date}{end})"
+        if self.label:
+            return f"[{self.label}] {base}"
+        return base
 
 @dataclass
 class OverridePeriod:
@@ -25,6 +29,9 @@ class OverridePeriod:
     from_date: date
     to_date: date
     pattern: VisitPattern         # komplett frei definierbare Tage
+    holder: Optional[str] = None  # 'mother' or 'father' or None
+    vac_type: Optional[str] = None  # detected vacation type: 'weihnachten','oster','sommer','herbst','unknown'
+    meta: Optional[str] = None  # JSON/text metadata (e.g. handover times)
 
 @dataclass
 class RemoveOverride:

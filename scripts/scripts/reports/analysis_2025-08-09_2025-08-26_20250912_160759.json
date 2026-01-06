@@ -1,0 +1,376 @@
+{
+  "window_start": "2025-08-09",
+  "window_end": "2025-08-26",
+  "patterns": [
+    {
+      "id": 3,
+      "weekdays": [
+        2
+      ],
+      "interval_weeks": 1,
+      "start_date": "2024-11-21",
+      "end_date": "2024-12-31"
+    },
+    {
+      "id": 9,
+      "weekdays": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "interval_weeks": 1,
+      "start_date": "2024-12-20",
+      "end_date": "2024-12-25"
+    },
+    {
+      "id": 10,
+      "weekdays": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "interval_weeks": 1,
+      "start_date": "2024-12-20",
+      "end_date": "2024-12-25"
+    },
+    {
+      "id": 11,
+      "weekdays": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "interval_weeks": 1,
+      "start_date": "2025-01-04",
+      "end_date": "2025-01-07"
+    },
+    {
+      "id": 12,
+      "weekdays": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "interval_weeks": 1,
+      "start_date": "2025-04-20",
+      "end_date": "2025-04-27"
+    },
+    {
+      "id": 15,
+      "weekdays": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "interval_weeks": 1,
+      "start_date": "2024-12-20",
+      "end_date": "2024-12-25"
+    },
+    {
+      "id": 16,
+      "weekdays": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "interval_weeks": 1,
+      "start_date": "2025-04-21",
+      "end_date": "2025-04-25"
+    },
+    {
+      "id": 18,
+      "weekdays": [
+        2
+      ],
+      "interval_weeks": 1,
+      "start_date": "2024-11-21",
+      "end_date": "2024-12-31"
+    },
+    {
+      "id": 19,
+      "weekdays": [
+        4,
+        5,
+        6
+      ],
+      "interval_weeks": 2,
+      "start_date": "2024-11-22",
+      "end_date": null
+    },
+    {
+      "id": 20,
+      "weekdays": [
+        1,
+        2
+      ],
+      "interval_weeks": 1,
+      "start_date": "2025-01-01",
+      "end_date": null
+    },
+    {
+      "id": 23,
+      "weekdays": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "interval_weeks": 1,
+      "start_date": "2025-01-04",
+      "end_date": "2025-01-07"
+    },
+    {
+      "id": 24,
+      "weekdays": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "interval_weeks": 1,
+      "start_date": "2025-04-20",
+      "end_date": "2025-04-27"
+    },
+    {
+      "id": 27,
+      "weekdays": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "interval_weeks": 1,
+      "start_date": "2024-12-20",
+      "end_date": "2024-12-25"
+    },
+    {
+      "id": 28,
+      "weekdays": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "interval_weeks": 1,
+      "start_date": "2025-04-21",
+      "end_date": "2025-04-25"
+    }
+  ],
+  "overrides": [
+    {
+      "id": 2,
+      "type": "remove",
+      "from": "2025-07-11",
+      "to": "2025-08-08"
+    },
+    {
+      "id": 4,
+      "type": "add",
+      "from": "2024-12-20",
+      "to": "2024-12-25",
+      "pattern_id": 15
+    },
+    {
+      "id": 5,
+      "type": "remove",
+      "from": "2024-12-26",
+      "to": "2025-01-01"
+    },
+    {
+      "id": 6,
+      "type": "remove",
+      "from": "2025-04-12",
+      "to": "2025-04-20"
+    },
+    {
+      "id": 7,
+      "type": "add",
+      "from": "2025-04-21",
+      "to": "2025-04-25",
+      "pattern_id": 16
+    }
+  ],
+  "days": {
+    "2025-08-09": {
+      "in_base_patterns": false,
+      "sources": [],
+      "visit_status": null
+    },
+    "2025-08-10": {
+      "in_base_patterns": false,
+      "sources": [],
+      "visit_status": {
+        "a": false,
+        "b": true
+      }
+    },
+    "2025-08-11": {
+      "in_base_patterns": false,
+      "sources": [],
+      "visit_status": {
+        "a": false,
+        "b": false
+      }
+    },
+    "2025-08-12": {
+      "in_base_patterns": true,
+      "sources": [
+        {
+          "kind": "pattern",
+          "id": 20
+        }
+      ],
+      "visit_status": {
+        "a": false,
+        "b": true
+      }
+    },
+    "2025-08-13": {
+      "in_base_patterns": true,
+      "sources": [
+        {
+          "kind": "pattern",
+          "id": 20
+        }
+      ],
+      "visit_status": null
+    },
+    "2025-08-14": {
+      "in_base_patterns": false,
+      "sources": [],
+      "visit_status": null
+    },
+    "2025-08-15": {
+      "in_base_patterns": true,
+      "sources": [
+        {
+          "kind": "pattern",
+          "id": 19
+        }
+      ],
+      "visit_status": null
+    },
+    "2025-08-16": {
+      "in_base_patterns": true,
+      "sources": [
+        {
+          "kind": "pattern",
+          "id": 19
+        }
+      ],
+      "visit_status": null
+    },
+    "2025-08-17": {
+      "in_base_patterns": true,
+      "sources": [
+        {
+          "kind": "pattern",
+          "id": 19
+        }
+      ],
+      "visit_status": null
+    },
+    "2025-08-18": {
+      "in_base_patterns": false,
+      "sources": [],
+      "visit_status": null
+    },
+    "2025-08-19": {
+      "in_base_patterns": true,
+      "sources": [
+        {
+          "kind": "pattern",
+          "id": 20
+        }
+      ],
+      "visit_status": null
+    },
+    "2025-08-20": {
+      "in_base_patterns": true,
+      "sources": [
+        {
+          "kind": "pattern",
+          "id": 20
+        }
+      ],
+      "visit_status": null
+    },
+    "2025-08-21": {
+      "in_base_patterns": false,
+      "sources": [],
+      "visit_status": {
+        "a": false,
+        "b": true
+      }
+    },
+    "2025-08-22": {
+      "in_base_patterns": false,
+      "sources": [],
+      "visit_status": {
+        "a": false,
+        "b": true
+      }
+    },
+    "2025-08-23": {
+      "in_base_patterns": false,
+      "sources": [],
+      "visit_status": null
+    },
+    "2025-08-24": {
+      "in_base_patterns": false,
+      "sources": [],
+      "visit_status": null
+    },
+    "2025-08-25": {
+      "in_base_patterns": false,
+      "sources": [],
+      "visit_status": null
+    },
+    "2025-08-26": {
+      "in_base_patterns": true,
+      "sources": [
+        {
+          "kind": "pattern",
+          "id": 20
+        }
+      ],
+      "visit_status": null
+    }
+  }
+}
