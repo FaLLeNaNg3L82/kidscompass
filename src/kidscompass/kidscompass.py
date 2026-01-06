@@ -958,8 +958,7 @@ class RestoreWorker(QObject):
         try:
             from kidscompass.data import Database
             db = Database(self.db_path)
-            # Use atomic import to verify and replace DB atomically
-            db.atomic_import_from_sql(self.fn)
+            db.import_from_sql(self.fn)
             if self._stopped:
                 db.close()
                 return

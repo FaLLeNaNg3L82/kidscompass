@@ -41,25 +41,29 @@ def apply_overrides(
       - RemoveOverride: entfernt Standard-Termine im Zeitraum.
       - OverridePeriod: entfernt Standard-Termine im Zeitraum, fügt an Stelle dessen die Pattern-Termine im Zeitraum hinzu.
     """
-    result_days   = set(standard_days)
-    override_days = set()
+    # Start with all standard days
+    result_days = set(standard_days)
 
     for ov in overrides:
-        # Entferne alle Std.-Tage im Override-Zeitraum
-        to_remove = {d for d in result_days if ov.from_date <= d <= ov.to_date}
+        # Remove only those standard days that fall within the override period
+        to_remove = {d for d in list(result_days) if ov.from_date <= d <= ov.to_date}
         result_days -= to_remove
 
         if isinstance(ov, OverridePeriod):
-            # generiere für das Jahr des Overrides
-            year = ov.from_date.year
-            cal  = generate_standard_days(ov.pattern, year)
-            for d in cal:
-                if ov.from_date <= d <= ov.to_date:
-                    override_days.add(d)
+            # For OverridePeriod, generate the days from its own pattern across the
+            # full span of the override. Use the pattern's weekdays/interval but only
+            # include dates inside the override range. Ensure generation covers years
+            # that the override spans.
+            start_year = ov.from_date.year
+            end_year = ov.to_date.year
+            for y in range(start_year, end_year + 1):
+                cal = generate_standard_days(ov.pattern, y)
+                for d in cal:
+                    if ov.from_date <= d <= ov.to_date:
+                        result_days.add(d)
 
-    # Vereine verbleibende Standard- und Override-Termine
-    combined = result_days.union(override_days)
-    return sorted(combined)
+    # Return sorted list preserving days outside overrides
+    return sorted(result_days)
 
 
 def summarize_visits(planned: List[date],

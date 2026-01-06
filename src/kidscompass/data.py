@@ -1,16 +1,26 @@
 import os
 import sqlite3
+import shutil
+import tempfile
+import datetime as _dt
 from datetime import date
 from typing import List, Dict
+from pathlib import Path
 from kidscompass.models import VisitPattern, OverridePeriod, RemoveOverride, VisitStatus
+from kidscompass.calendar_logic import generate_standard_days
 import logging
 
 class Database:
     def __init__(self, db_path: str = None):
         try:
-            self.db_path = db_path or os.path.join(os.path.expanduser("~"), ".kidscompass", "kidscompass.db")
+            # Resolve stable absolute DB path. Default: ~/.kidscompass/kidscompass.db
+            default = os.path.join(os.path.expanduser("~"), ".kidscompass", "kidscompass.db")
+            self.db_path = os.fspath(Path(db_path) if db_path else Path(default))
+            # Special in-memory DB
             if self.db_path != ':memory:':
-                os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+                parent = os.path.dirname(self.db_path)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
             self.conn = sqlite3.connect(self.db_path)
             self.conn.row_factory = sqlite3.Row
             self.conn.execute("PRAGMA foreign_keys = ON;")  # Enable foreign key constraints
@@ -75,6 +85,66 @@ class Database:
         self.conn.executescript(script)
         self.conn.commit()
 
+    def atomic_import_from_sql(self, filename: str):
+        """
+        Atomarer Import: importiert das SQL in eine temporäre DB, verifiziert
+        dass mindestens die `patterns`-Tabelle existiert und ersetzt dann die
+        aktuelle DB-Datei durch die temporäre DB (mit Backup).
+        Bei `:memory:`-DB wird `import_from_sql` ausgeführt.
+        """
+        if self.db_path == ':memory:':
+            return self.import_from_sql(filename)
+
+        with open(filename, 'r', encoding='utf-8') as f:
+            script = f.read()
+
+        ts = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+        tmpdb = os.path.join(os.path.dirname(self.db_path), f'.tmp_restore_{ts}.db')
+        if os.path.exists(tmpdb):
+            os.remove(tmpdb)
+
+        conn_tmp = sqlite3.connect(tmpdb)
+        conn_tmp.row_factory = sqlite3.Row
+        try:
+            conn_tmp.executescript(script)
+            conn_tmp.commit()
+            cur = conn_tmp.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='patterns'")
+            if cur.fetchone() is None:
+                raise ValueError('Import enthält keine Tabelle "patterns"; Restore abgebrochen.')
+        except Exception:
+            conn_tmp.close()
+            if os.path.exists(tmpdb):
+                os.remove(tmpdb)
+            raise
+        finally:
+            conn_tmp.close()
+
+        bak = f"{self.db_path}.bak_before_restore_{ts}"
+        try:
+            if os.path.exists(self.db_path):
+                shutil.copy2(self.db_path, bak)
+            shutil.copy2(tmpdb, self.db_path)
+        except Exception:
+            if os.path.exists(tmpdb):
+                os.remove(tmpdb)
+            raise
+        finally:
+            if os.path.exists(tmpdb):
+                os.remove(tmpdb)
+
+        try:
+            if self.conn:
+                try:
+                    self.conn.close()
+                except Exception:
+                    pass
+        finally:
+            self.conn = sqlite3.connect(self.db_path)
+            self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA foreign_keys = ON;")
+            self._ensure_tables()
+
     # Pattern-Methoden
     def load_patterns(self):
         cur = self.conn.cursor()
@@ -96,6 +166,23 @@ class Database:
             sd = pat.start_date.isoformat()
             ed = pat.end_date.isoformat() if pat.end_date else None
             cur = self.conn.cursor()
+            # Prevent duplicate inserts: check for existing identical pattern
+            if getattr(pat, 'id', None) is None:
+                if ed is None:
+                    cur.execute(
+                        "SELECT id FROM patterns WHERE weekdays=? AND interval_weeks=? AND start_date=? AND end_date IS NULL",
+                        (wd_text, pat.interval_weeks, sd)
+                    )
+                else:
+                    cur.execute(
+                        "SELECT id FROM patterns WHERE weekdays=? AND interval_weeks=? AND start_date=? AND end_date=?",
+                        (wd_text, pat.interval_weeks, sd, ed)
+                    )
+                row = cur.fetchone()
+                if row:
+                    pat.id = row['id']
+                    logging.info(f"Duplicate pattern detected; using existing id={pat.id}")
+                    return
             if getattr(pat, 'id', None) is not None:
                 cur.execute(
                     "UPDATE patterns SET weekdays=?, interval_weeks=?, start_date=?, end_date=? WHERE id=?",
@@ -189,8 +276,19 @@ class Database:
 
     def delete_override(self, override_id: int):
         cur = self.conn.cursor()
-        cur.execute("DELETE FROM overrides WHERE id=?", (override_id,))
-        self.conn.commit()
+        # Ermittele, ob dieses Override auf ein Pattern referenziert (nur zu Informationszwecken)
+        try:
+            cur.execute("SELECT pattern_id FROM overrides WHERE id=?", (override_id,))
+            row = cur.fetchone()
+            pattern_id = row['pattern_id'] if row and 'pattern_id' in row.keys() else None
+            if pattern_id:
+                logging.info(f"Lösche Override id={override_id} (referenziert pattern_id={pattern_id}). Pattern wird nicht automatisch entfernt.")
+            # Lösche nur das Override — sicherer, damit keine Muster unbeabsichtigt verloren gehen
+            cur.execute("DELETE FROM overrides WHERE id=?", (override_id,))
+            self.conn.commit()
+        except Exception as e:
+            logging.exception(f"Fehler beim Löschen des Overrides id={override_id}: {e}")
+            raise
 
     # VisitStatus-Methoden
     def load_all_status(self) -> dict[date, VisitStatus]:
@@ -278,6 +376,70 @@ class Database:
             status[d0] = vs
         cur.close()
         return status
+
+    def find_unreferenced_patterns(self, start_date: date | None = None, end_date: date | None = None) -> List[Dict]:
+        """Returns list of pattern rows (dict) that are not referenced by any override and
+        that produce at least one date in the given date window (if provided).
+        """
+        cur = self.conn.cursor()
+        cur.execute("SELECT pattern_id FROM overrides WHERE pattern_id IS NOT NULL")
+        referenced = {r['pattern_id'] for r in cur.fetchall()}
+
+        cur.execute("SELECT id, weekdays, interval_weeks, start_date, end_date FROM patterns")
+        out = []
+        for row in cur.fetchall():
+            pid = row['id']
+            if pid in referenced:
+                continue
+            # If no window is provided, include all unreferenced patterns
+            if start_date is None and end_date is None:
+                out.append(dict(row))
+                continue
+            # Build pattern and check if it produces dates in window
+            wd = [int(x) for x in row['weekdays'].split(',') if x]
+            sd = date.fromisoformat(row['start_date'])
+            ed = date.fromisoformat(row['end_date']) if row['end_date'] else None
+            pat = VisitPattern(wd, row['interval_weeks'], sd, ed)
+            years = range(sd.year, (ed.year if ed else (end_date.year if end_date else sd.year)) + 1)
+            has = False
+            for y in years:
+                for d in generate_standard_days(pat, y):
+                    if start_date <= d <= end_date:
+                        has = True
+                        break
+                if has:
+                    break
+            if has:
+                out.append(dict(row))
+        cur.close()
+        return out
+
+    def find_duplicate_patterns(self) -> List[List[int]]:
+        """Return list of lists of pattern ids that are duplicates (same key)."""
+        cur = self.conn.cursor()
+        cur.execute("SELECT id, weekdays, interval_weeks, start_date, end_date FROM patterns ORDER BY id")
+        by_key = {}
+        for row in cur.fetchall():
+            key = (','.join(sorted([x for x in row['weekdays'].split(',') if x])), row['interval_weeks'], row['start_date'], row['end_date'] if row['end_date'] else None)
+            by_key.setdefault(key, []).append(row['id'])
+        cur.close()
+        return [ids for ids in by_key.values() if len(ids) > 1]
+
+    def remove_duplicate_patterns(self, keep_first=True) -> int:
+        """Remove duplicate pattern rows. Returns number of deleted rows."""
+        dup_groups = self.find_duplicate_patterns()
+        cur = self.conn.cursor()
+        removed = 0
+        for ids in dup_groups:
+            keep = ids[0] if keep_first else ids[-1]
+            for pid in ids:
+                if pid == keep:
+                    continue
+                cur.execute("DELETE FROM patterns WHERE id=?", (pid,))
+                removed += cur.rowcount
+        self.conn.commit()
+        cur.close()
+        return removed
 
     def close(self):
         if self.conn:
