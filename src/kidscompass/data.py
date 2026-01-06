@@ -12,6 +12,7 @@ import logging
 import re
 import shutil
 import time
+import json
 
 class Database:
     def __init__(self, db_path: str = None):
@@ -96,6 +97,29 @@ class Database:
             except Exception:
                 pass
             self.conn.commit()
+
+# Policy for how to count days that contain a handover time (e.g. 25.12 18:00)
+# Options: 'neutral' (do not count for either parent), 'night_owner' (count for parent who has the night),
+# 'majority' (count for parent who has larger share of the day). Default: 'neutral' for judge-aligned fairness.
+HANDOVER_DAY_POLICY = 'neutral'
+
+def handover_day_counts(meta_json: str) -> bool:
+    """Decide whether a day marked as a handover (partial-day transfer) should be
+    counted as a planned/should-day for statistics.
+
+    Input: meta_json - JSON string or dict-like representing override.meta
+    Returns: True if the day should be counted for the holder, False if it should be neutral.
+    Current minimal policy: return False (neutral) for any handover-day.
+    """
+    try:
+        m = json.loads(meta_json) if isinstance(meta_json, str) and meta_json else (meta_json or {})
+    except Exception:
+        m = meta_json or {}
+    # Minimal policy: always neutral for days with explicit handovers
+    if m and isinstance(m, dict) and m.get('handovers'):
+        return False
+    # default: count
+    return True
 
     # Export/Import
     def export_to_sql(self, filename: str):
