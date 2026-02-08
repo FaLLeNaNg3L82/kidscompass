@@ -27,7 +27,9 @@ def handover_day_counts(meta_json: str) -> bool:
         m = json.loads(meta_json) if isinstance(meta_json, str) and meta_json else (meta_json or {})
     except Exception:
         m = meta_json or {}
-    if m and isinstance(m, dict) and m.get('neutral_dates'):
+    # Accept both new 'neutral_dates' and legacy 'handovers' metadata as indicators
+    # that some days are neutral and should not be counted as planned/should-days.
+    if m and isinstance(m, dict) and (m.get('neutral_dates') or m.get('handovers')):
         return False
     return True
 
@@ -79,134 +81,140 @@ class Database:
           from_date TEXT NOT NULL,
           to_date TEXT NOT NULL,
           pattern_id INTEGER,
-            if dtstart and dtend:
-                import re, json
-                l = (label or '').lower()
-                if re.search(r'weihnacht', l):
-                    vac_type = 'weihnachten'
-                elif re.search(r'oster', l):
-                    vac_type = 'oster'
-                elif re.search(r'sommer', l):
-                    vac_type = 'sommer'
-                elif re.search(r'herbst', l):
-                    vac_type = 'herbst'
-                elif re.search(r'pfing', l):
-                    vac_type = 'pfingsten'
-                else:
-                    vac_type = self._ask_vacation_type(label)
+          holder TEXT,
+                    vac_type TEXT,
+                    meta TEXT,
+          FOREIGN KEY(pattern_id) REFERENCES patterns(id)
+        )""")
 
-                year = dtstart.year
-                parity_even = ((year - anchor_year) % 2 == 0)
+        # Besuchsstatus
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS visit_status (
+          day TEXT PRIMARY KEY,
+          present_child_a INTEGER NOT NULL,
+          present_child_b INTEGER NOT NULL
+        )""")
 
-                # Weihnachten (day-based)
-                if vac_type == 'weihnachten':
-                    special_start = date(2024,12,20)
-                    special_mid_start = date(2025,1,4)
-                    special_mid_end = date(2025,1,7)
-                    if dtstart <= special_start and dtend >= special_mid_end and year == 2024:
-                        b1_from = max(dtstart, special_start)
-                        b1_to = min(dtend, date(2024,12,24))
-                        meta1 = json.dumps({'anchor_year': anchor_year, 'assigned': 'special_2024_2025_block_1', 'year': 2024, 'neutral_dates': ['2024-12-25','2025-01-04']})
-                        pat1 = VisitPattern(list(range(7)), 1, b1_from, b1_to)
-                        ov1 = OverridePeriod(b1_from, b1_to, pat1, holder='father', vac_type='weihnachten', meta=meta1)
-                        self.save_override(ov1)
-                        created.append(ov1)
+        self.conn.commit()
 
-                        b2_from = max(dtstart, date(2025,1,5))
-                        b2_to = min(dtend, date(2025,1,7))
-                        meta2 = json.dumps({'anchor_year': anchor_year, 'assigned': 'special_2024_2025_block_2', 'year': 2025, 'neutral_dates': ['2024-12-25','2025-01-04']})
-                        pat2 = VisitPattern(list(range(7)), 1, b2_from, b2_to)
-                        ov2 = OverridePeriod(b2_from, b2_to, pat2, holder='father', vac_type='weihnachten', meta=meta2)
-                        self.save_override(ov2)
-                        created.append(ov2)
-                        continue
+        # Ensure holder column exists for older DBs
+        cur.execute("PRAGMA table_info(overrides)")
+        cols = [r['name'] for r in cur.fetchall()]
+        if 'holder' not in cols:
+            try:
+                cur.execute("ALTER TABLE overrides ADD COLUMN holder TEXT")
+            except Exception:
+                pass
+        if 'vac_type' not in cols:
+            try:
+                cur.execute("ALTER TABLE overrides ADD COLUMN vac_type TEXT")
+            except Exception:
+                pass
+        if 'meta' not in cols:
+            try:
+                cur.execute("ALTER TABLE overrides ADD COLUMN meta TEXT")
+            except Exception:
+                pass
+            self.conn.commit()
 
-                    if dtstart.year + 1 == dtend.year:
-                        y = dtstart.year
-                        phase_a_from = dtstart
-                        phase_a_to = date(y,12,24)
-                        phase_b_from = date(y,12,26)
-                        phase_b_to = date(y,12,31)
-                        neutral = [date(y,12,25).isoformat(), date(y+1,1,1).isoformat()]
-                        father_phase = 'second' if parity_even else 'first'
-                        if father_phase == 'first':
-                            pat = VisitPattern(list(range(7)), 1, phase_a_from, phase_a_to)
-                            ov = OverridePeriod(phase_a_from, phase_a_to, pat, holder='father', vac_type='weihnachten', meta=json.dumps({'anchor_year': anchor_year, 'assigned': 'first', 'year': y, 'neutral_dates': neutral}))
-                            self.save_override(ov)
-                            created.append(ov)
-                        else:
-                            pat = VisitPattern(list(range(7)), 1, phase_b_from, phase_b_to)
-                            ov = OverridePeriod(phase_b_from, phase_b_to, pat, holder='father', vac_type='weihnachten', meta=json.dumps({'anchor_year': anchor_year, 'assigned': 'second', 'year': y, 'neutral_dates': neutral}))
-                            self.save_override(ov)
-                            created.append(ov)
-                        continue
+    # Export/Import
+    def export_to_sql(self, filename: str):
+        """Dump aller Tabellen als SQL-Statements"""
+        with open(filename, 'w', encoding='utf-8') as f:
+            for line in self.conn.iterdump():
+                f.write(f"{line}\n")
 
-                    halves = self._split_into_halves(dtstart, dtend)
-                    sel_idx = 1 if parity_even else 0
-                    hf, ht = halves[sel_idx]
-                    meta = json.dumps({'anchor_year': anchor_year, 'assigned': 'second' if parity_even else 'first', 'year': year})
-                    pat = VisitPattern(list(range(7)), 1, hf, ht)
-                    ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
-                    self.save_override(ov)
-                    created.append(ov)
-                    continue
+    def import_from_sql(self, filename: str):
+        """Vorhandene Tabellen löschen, Dump einlesen und ausführen"""
+        cur = self.conn.cursor()
+        for tbl in ('visit_status', 'overrides', 'patterns'):
+            cur.execute(f"DROP TABLE IF EXISTS {tbl}")
+        self.conn.commit()
 
-                # Summer: keep 14-day rule
-                if vac_type == 'sommer':
-                    total_days = (dtend - dtstart).days + 1
-                    if total_days >= 14:
-                        if parity_even:
-                            assigned = 'last_14'
-                            hf = dtend - _dt.timedelta(days=13)
-                            ht = dtend
-                        else:
-                            assigned = 'first_14'
-                            hf = dtstart
-                            ht = dtstart + _dt.timedelta(days=13)
-                        pat = VisitPattern(list(range(7)), 1, hf, ht)
-                        meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
-                        ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
-                        self.save_override(ov)
-                        created.append(ov)
-                    else:
-                        # short summer/vacation handling as before
-                        if total_days < 2:
-                            hf = dtstart
-                            ht = dtstart
-                            pat = VisitPattern(list(range(7)), 1, hf, ht)
-                            meta = json.dumps({'anchor_year': anchor_year, 'assigned': 'first' if ((dtstart - dtstart).days) < 1 else 'second', 'year': year})
-                            ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
-                            self.save_override(ov)
-                            created.append(ov)
-                        elif total_days == 2:
-                            halves = self._split_into_halves(dtstart, dtend)
-                            assigned = 'second' if parity_even else 'first'
-                            sel_idx = 1 if assigned == 'second' else 0
-                            hf, ht = halves[sel_idx]
-                            pat = VisitPattern(list(range(7)), 1, hf, ht)
-                            meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
-                            ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
-                            self.save_override(ov)
-                            created.append(ov)
-                        else:
-                            assigned = 'entire'
-                            pat = VisitPattern(list(range(7)), 1, dtstart, dtend)
-                            meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
-                            ov = OverridePeriod(dtstart, dtend, pat, holder='father', vac_type=vac_type, meta=meta)
-                            self.save_override(ov)
-                            created.append(ov)
-                    continue
+        with open(filename, 'r', encoding='utf-8') as f:
+            script = f.read()
+        self.conn.executescript(script)
+        self.conn.commit()
 
-                # Other types fallback: simple half split
-                halves = self._split_into_halves(dtstart, dtend)
-                sel_idx = 1 if parity_even else 0
-                hf, ht = halves[sel_idx]
-                pat = VisitPattern(list(range(7)), 1, hf, ht)
-                meta = json.dumps({'anchor_year': anchor_year, 'assigned': 'second' if parity_even else 'first', 'year': year})
-                ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
-                self.save_override(ov)
-                created.append(ov)
-        return created
+    def atomic_import_from_sql(self, filename: str):
+        """
+        Atomarer Import: importiert das SQL in eine temporäre DB, verifiziert
+        dass mindestens die `patterns`-Tabelle existiert und ersetzt dann die
+        aktuelle DB-Datei durch die temporäre DB (mit Backup).
+        Bei `:memory:`-DB wird `import_from_sql` ausgeführt.
+        """
+        if self.db_path == ':memory:':
+            return self.import_from_sql(filename)
+
+        with open(filename, 'r', encoding='utf-8') as f:
+            script = f.read()
+
+        ts = _dt.datetime.now().strftime('%Y%m%d_%H%M%S')
+        tmpdb = os.path.join(os.path.dirname(self.db_path), f'.tmp_restore_{ts}.db')
+        if os.path.exists(tmpdb):
+            os.remove(tmpdb)
+
+        conn_tmp = sqlite3.connect(tmpdb)
+        conn_tmp.row_factory = sqlite3.Row
+        try:
+            conn_tmp.executescript(script)
+            conn_tmp.commit()
+            cur = conn_tmp.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='patterns'")
+            if cur.fetchone() is None:
+                raise ValueError('Import enthält keine Tabelle "patterns"; Restore abgebrochen.')
+        except Exception:
+            conn_tmp.close()
+            if os.path.exists(tmpdb):
+                os.remove(tmpdb)
+            raise
+        finally:
+            conn_tmp.close()
+
+        bak = f"{self.db_path}.bak_before_restore_{ts}"
+        try:
+            if os.path.exists(self.db_path):
+                shutil.copy2(self.db_path, bak)
+            shutil.copy2(tmpdb, self.db_path)
+        except Exception:
+            if os.path.exists(tmpdb):
+                os.remove(tmpdb)
+            raise
+        finally:
+            if os.path.exists(tmpdb):
+                os.remove(tmpdb)
+
+        try:
+            if self.conn:
+                try:
+                    self.conn.close()
+                except Exception:
+                    pass
+        finally:
+            self.conn = sqlite3.connect(self.db_path)
+            self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA foreign_keys = ON;")
+            self._ensure_tables()
+
+    # Pattern-Methoden
+    def load_patterns(self):
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT id, weekdays, interval_weeks, start_date, end_date, label FROM patterns"
+        )
+        out = []
+        bad_ids = []
+        for row in cur.fetchall():
+            wk = row['weekdays'] or ''
+            # validate weekdays format: digits and commas only, e.g. '0,1,2'
+            if not re.match(r'^\d+(,\d+)*$', wk):
+                logging.warning(f"Invalid weekdays for pattern id={row['id']}: '{wk}' - skipping")
+                bad_ids.append(row['id'])
+                continue
+            wd = [int(x) for x in wk.split(',') if x]
+            start = date.fromisoformat(row['start_date'])
+            end = date.fromisoformat(row['end_date']) if row['end_date'] else None
+            pat = VisitPattern(wd, row['interval_weeks'], start, end, label=row['label'] if 'label' in row.keys() else None)
             pat.id = row['id']
             out.append(pat)
         if bad_ids:
@@ -898,23 +906,83 @@ class Database:
                 year = dtstart.year
                 parity_even = ((year - anchor_year) % 2 == 0)
 
-                # non-summer: assign first/second according to anchor_year parity (2025->second)
+                # Weihnachten special-case: judge ruling 2024/2025 -> two father blocks
+                if vac_type == 'weihnachten':
+                    special_start = date(2024,12,20)
+                    special_mid_start = date(2025,1,4)
+                    special_mid_end = date(2025,1,7)
+                    if dtstart <= special_start and dtend >= special_mid_end and year == 2024:
+                        # father: 20..24 Dec 2024 (25 Dec neutral)
+                        b1_from = max(dtstart, special_start)
+                        b1_to = min(dtend, date(2024,12,24))
+                        meta1 = json.dumps({'anchor_year': anchor_year, 'assigned': 'special_2024_2025_block_1', 'year': 2024, 'neutral_dates': ['2024-12-25','2025-01-04']})
+                        pat1 = VisitPattern(list(range(7)), 1, b1_from, b1_to)
+                        ov1 = OverridePeriod(b1_from, b1_to, pat1, holder='father', vac_type='weihnachten', meta=meta1)
+                        self.save_override(ov1)
+                        created.append(ov1)
+
+                        # father: 05..07 Jan 2025 (04 Jan neutral)
+                        b2_from = max(dtstart, date(2025,1,5))
+                        b2_to = min(dtend, date(2025,1,7))
+                        meta2 = json.dumps({'anchor_year': anchor_year, 'assigned': 'special_2024_2025_block_2', 'year': 2025, 'neutral_dates': ['2024-12-25','2025-01-04']})
+                        pat2 = VisitPattern(list(range(7)), 1, b2_from, b2_to)
+                        ov2 = OverridePeriod(b2_from, b2_to, pat2, holder='father', vac_type='weihnachten', meta=meta2)
+                        self.save_override(ov2)
+                        created.append(ov2)
+                        continue
+
+                # non-summer: special handling for Ostern/Herbst (day-based split), Christmas handled above
                 if vac_type != 'sommer':
+                    # Ostern/Herbst: split deterministically at the Sunday after first week; Sunday is neutral
+                    if vac_type in ('oster', 'herbst'):
+                        candidate = dtstart + _dt.timedelta(days=6)
+                        days_to_sunday = (6 - candidate.weekday()) % 7
+                        switch_day = candidate + _dt.timedelta(days=days_to_sunday)
+                        if switch_day < dtstart:
+                            switch_day = dtstart
+                        if switch_day > dtend:
+                            # too short: fallback to halves
+                            halves_local = self._split_into_halves(dtstart, dtend)
+                            sel_idx = 1 if parity_even else 0
+                            hf, ht = halves_local[sel_idx]
+                            meta = json.dumps({'anchor_year': anchor_year, 'assigned': 'second' if parity_even else 'first', 'year': year, 'neutral_dates': [switch_day.isoformat()]})
+                            pat = VisitPattern(list(range(7)), 1, hf, ht)
+                            ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
+                            self.save_override(ov)
+                            created.append(ov)
+                            continue
+                        # phase A: dtstart .. switch_day -1 (Saturday)
+                        phase_a_from = dtstart
+                        phase_a_to = switch_day - _dt.timedelta(days=1)
+                        # phase B: switch_day +1 .. dtend (Monday .. end)
+                        phase_b_from = switch_day + _dt.timedelta(days=1)
+                        phase_b_to = dtend
+                        neutral = [switch_day.isoformat()]
+                        father_phase = 'second' if parity_even else 'first'
+                        if father_phase == 'first':
+                            pat = VisitPattern(list(range(7)), 1, phase_a_from, phase_a_to)
+                            ov = OverridePeriod(phase_a_from, phase_a_to, pat, holder='father', vac_type=vac_type, meta=json.dumps({'anchor_year': anchor_year, 'assigned': 'first', 'year': year, 'neutral_dates': neutral}))
+                            self.save_override(ov)
+                            created.append(ov)
+                        else:
+                            pat = VisitPattern(list(range(7)), 1, phase_b_from, phase_b_to)
+                            ov = OverridePeriod(phase_b_from, phase_b_to, pat, holder='father', vac_type=vac_type, meta=json.dumps({'anchor_year': anchor_year, 'assigned': 'second', 'year': year, 'neutral_dates': neutral}))
+                            self.save_override(ov)
+                            created.append(ov)
+                        continue
+
+                    # Fallback: assign first/second half according to parity
                     assigned = 'second' if parity_even else 'first'
                     sel_idx = 1 if assigned == 'second' else 0
                     hf, ht = halves[sel_idx]
-                    meta = None
+                    # For Christmas prefer neutral_dates instead of time-based metadata
                     if vac_type == 'weihnachten':
-                        # attach special christmas metadata as before
-                        if assigned == 'first':
-                            meta = json.dumps({'end_type':'first_holiday','end_time':'18:00','anchor_year':anchor_year, 'assigned':assigned, 'year':year})
-                        else:
-                            meta = json.dumps({'end_type':'jan1','end_time':'17:00','anchor_year':anchor_year, 'assigned':assigned, 'year':year})
+                        neutral = [f"{year}-12-25", f"{year+1}-01-01"]
+                        meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year, 'neutral_dates': neutral})
                     else:
-                        import json
                         meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
                     pat = VisitPattern(list(range(7)), 1, hf, ht)
-                    ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                    ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
                     self.save_override(ov)
                     created.append(ov)
                 else:
@@ -931,7 +999,7 @@ class Database:
                             ht = dtstart + _dt.timedelta(days=13)
                         pat = VisitPattern(list(range(7)), 1, hf, ht)
                         meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
-                        ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                        ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
                         self.save_override(ov)
                         created.append(ov)
                     else:
@@ -943,7 +1011,7 @@ class Database:
                             ht = dtstart
                             pat = VisitPattern(list(range(7)), 1, hf, ht)
                             meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
-                            ov = OverridePeriod(hf, ht, pat, holder='mother', vac_type=vac_type, meta=meta)
+                            ov = OverridePeriod(hf, ht, pat, holder='father', vac_type=vac_type, meta=meta)
                             self.save_override(ov)
                             created.append(ov)
                         elif total_days == 2:
@@ -960,7 +1028,7 @@ class Database:
                             assigned = 'entire'
                             pat = VisitPattern(list(range(7)), 1, dtstart, dtend)
                             meta = json.dumps({'anchor_year': anchor_year, 'assigned': assigned, 'year': year})
-                            ov = OverridePeriod(dtstart, dtend, pat, holder='mother', vac_type=vac_type, meta=meta)
+                            ov = OverridePeriod(dtstart, dtend, pat, holder='father', vac_type=vac_type, meta=meta)
                             self.save_override(ov)
                             created.append(ov)
         return created
