@@ -179,10 +179,6 @@ class Database:
         except Exception:
             if os.path.exists(tmpdb):
                 os.remove(tmpdb)
-            raise
-        finally:
-            if os.path.exists(tmpdb):
-                os.remove(tmpdb)
 
         try:
             if self.conn:
@@ -292,9 +288,29 @@ class Database:
                     end = date.fromisoformat(prow['end_date']) if prow['end_date'] else None
                     pat = VisitPattern(wd, prow['interval_weeks'], start, end)
                     pat.id = prow['id']
+                    # Normalize legacy metadata: convert 'handovers' -> 'neutral_dates'
+                    raw_meta = row['meta'] if 'meta' in row.keys() else None
+                    norm_meta = None
+                    if raw_meta:
+                        try:
+                            mobj = json.loads(raw_meta) if isinstance(raw_meta, str) else (raw_meta or {})
+                            if isinstance(mobj, dict) and mobj.get('handovers') and not mobj.get('neutral_dates'):
+                                # handovers may be list of dicts or date strings; extract ISO dates
+                                h = mobj.get('handovers') or []
+                                nd = []
+                                for item in h:
+                                    if isinstance(item, dict) and item.get('date'):
+                                        nd.append(item.get('date'))
+                                    elif isinstance(item, str):
+                                        nd.append(item)
+                                mobj.pop('handovers', None)
+                                mobj['neutral_dates'] = nd
+                            norm_meta = json.dumps(mobj)
+                        except Exception:
+                            norm_meta = raw_meta
                     ov = OverridePeriod(f, t, pat, holder=row['holder'] if 'holder' in row.keys() else None,
                                          vac_type=row['vac_type'] if 'vac_type' in row.keys() else None,
-                                         meta=row['meta'] if 'meta' in row.keys() else None)
+                                         meta=norm_meta)
                 else:
                     # Falls Pattern nicht gefunden -> loggen und überspringen
                     logging.warning(f"Override verweist auf fehlendes Pattern id={row['pattern_id']}")
@@ -321,6 +337,23 @@ class Database:
         holder = getattr(ov, 'holder', None) if isinstance(ov, OverridePeriod) else None
         vac_type = getattr(ov, 'vac_type', None) if isinstance(ov, OverridePeriod) else None
         meta = getattr(ov, 'meta', None) if isinstance(ov, OverridePeriod) else None
+        # Ensure we store meta as JSON string and normalize legacy 'handovers' -> 'neutral_dates'
+        if meta:
+            try:
+                mobj = json.loads(meta) if isinstance(meta, str) else (meta or {})
+                if isinstance(mobj, dict) and mobj.get('handovers') and not mobj.get('neutral_dates'):
+                    h = mobj.get('handovers') or []
+                    nd = []
+                    for item in h:
+                        if isinstance(item, dict) and item.get('date'):
+                            nd.append(item.get('date'))
+                        elif isinstance(item, str):
+                            nd.append(item)
+                    mobj.pop('handovers', None)
+                    mobj['neutral_dates'] = nd
+                meta = json.dumps(mobj)
+            except Exception:
+                pass
         if getattr(ov, 'id', None) is not None:
             cur.execute(
                 "UPDATE overrides SET type=?, from_date=?, to_date=?, pattern_id=?, holder=?, vac_type=?, meta=? WHERE id=?",
